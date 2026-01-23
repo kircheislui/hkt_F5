@@ -1,0 +1,18 @@
+---
+- name: Set fact for email object
+  ansible.builtin.set_fact:
+    f5_email_object: "{{ email_group.1 }}"
+
+- name: Print out email_object
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.template', 'templates/email.j2' ) }}"
+
+- name: Send email for result
+  community.general.mail:
+    host: smtp.pccw.com
+    port: 25
+    from: osp-alertmgr@pccw.com
+    to: "{{ f5_email_renew_notification_list }}"
+    subject: "[Ansible] [F5-Renew-Cert] [CR-{{  f5_email_object[0].uploaded_cert.ansible_job_id }}-{{ '%03d' | format(f5_cert_deploy_email_index) }}] Domain Renewal Information [Expiry Date: {{ f5_email_object[0].client_cert.expiration_date }} ]"
+    body: "{{ lookup('ansible.builtin.template', 'templates/email.j2' ) }}"
+    subtype: "html"

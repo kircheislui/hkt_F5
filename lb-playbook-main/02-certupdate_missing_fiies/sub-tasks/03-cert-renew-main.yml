@@ -1,0 +1,10 @@
+    - name: Inclue SFTP Tasks to get a list of DNS to Check
+      ansible.builtin.include_tasks: sub-tasks/03-sftp-cert-processing.yml
+    
+    - name: Check F5 VIP and Profiles to be updated
+      ansible.builtin.include_tasks: sub-tasks/03-check-f5-vip-extra-dnsnames.yml
+      vars:
+        f5_hostname_to_check_list: "{{ f5_cert_name_list_item }}"
+      loop: "{{ f5_cert_name_list }}"
+      loop_control:
+        loop_var: f5_cert_name_list_item

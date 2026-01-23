@@ -1,0 +1,53 @@
+    - name: Copy the file to localhost
+      ansible.builtin.shell: |
+        sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no' {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/certs_uat/{{ PROCESSED_FOLDER_NAME }}/ <<< "get {{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.crt /tmp/{{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.crt"
+        sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no' {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/certs_uat/{{ PROCESSED_FOLDER_NAME }}/ <<< "get {{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.key /tmp/{{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.key"
+      args:
+        chdir: "/tmp/"
+      delegate_to: localhost
+      register: copy_result
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+       
+    - name: Verify copied files
+      ansible.builtin.stat:
+        path: "/tmp/{{ file_stat_item }}"
+      register: file_stat
+      delegate_to: localhost
+      loop:
+      - "{{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.crt"
+      - "{{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.key"
+      loop_control:
+        loop_var: file_stat_item
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Get the name cert name
+      ansible.builtin.set_fact:
+        f5_cert_deploy_cert_name: "{{ f5_cert_deploy_object_single.uploaded_cert.names[0] }}-{{ f5_current_year_in_string }}-{{ f5_cert_deploy_object_single.uploaded_cert.ansible_job_id }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"   
+
+    - name: Upload new cert to F5
+      f5networks.f5_modules.bigip_ssl_certificate:
+        name: "{{ f5_cert_deploy_cert_name }}"
+        true_names: true
+        state: present
+        content: "{{ lookup('file','/tmp/' + f5_cert_deploy_object_single.uploaded_cert.file_timestamp + '.' + f5_cert_deploy_object_single.uploaded_cert.filename +'.crt' ) }}"
+        provider: "{{ provider }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Upload new key to F5
+      f5networks.f5_modules.bigip_ssl_key:
+        name: "{{ f5_cert_deploy_cert_name }}"
+        true_names: true
+        state: present
+        content: "{{ lookup('file','/tmp/' + f5_cert_deploy_object_single.uploaded_cert.file_timestamp + '.' + f5_cert_deploy_object_single.uploaded_cert.filename +'.key' ) }}"
+        provider: "{{ provider }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+              

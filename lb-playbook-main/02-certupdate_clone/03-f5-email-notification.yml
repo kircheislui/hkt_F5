@@ -1,0 +1,60 @@
+---
+- name: F5 Email notification
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+  - f5_email_table_style: "style='border: 1px solid;'"
+  tasks:
+
+  - name: setup variable with successful and failed list
+    ansible.builtin.set_fact:
+      f5_email_object: "{{ f5_email_object | default([]) + [ {
+          'ansible_job_id': item.uploaded_cert.ansible_job_id | default('Unknown'),
+          'f5_virtual_server_full_path': item.virtual_server | default('None'),
+          'f5_device_name': item.device_name | default('Unknown Device'),
+          'f5_vip': item.virtual_server_address | default('N/A'),
+          
+          'f5_current_client_cert': {
+              'cert_fullpath_in_f5': (item.client_cert | default({})).full_path | default('N/A'),
+              'expiration_date': (item.client_cert | default({})).expiration_date | default('N/A'),
+              'dns_names': ((item.client_cert | default({})).subject_alternative_name | default('') | replace('DNS:','')) or 'N/A'
+          },
+          
+          'f5_current_server_cert': {
+              'cert_fullpath_in_f5': (item.server_cert | default({})).full_path | default('N/A'),
+              'expiration_date': (item.server_cert | default({})).expiration_date | default('N/A'),
+              'dns_names': ((item.server_cert | default({})).subject_alternative_name | default('') | replace('DNS:','')) or 'N/A'
+          },
+          
+          'uploaded_cert': {
+              'filename': (item.uploaded_cert | default({})).filename | default('Unknown'),
+              'expiration_date': (item.uploaded_cert | default({})).expiration_date | default('N/A'),
+              'dns_names': ((item.uploaded_cert | default({})).names | default([])) | join(',')
+          }
+      } ] }}"
+    run_once: true
+    delegate_to: localhost
+    loop: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | default([]) }}"
+    loop_control:
+        loop_var: item
+  
+  - name: Print out email_object
+    ansible.builtin.debug:
+      msg: "{{ lookup('ansible.builtin.template', 'templates/email.j2' ) }}"
+    delegate_to: localhost
+
+  - name: Send email for result
+    community.general.mail:
+      host: smtp.pccw.com
+      port: 25
+      from: osp-alertmgr@pccw.com
+      to: 
+      - "gary.wl.lai@pccw.com"
+      - "yelui@redhat.com"
+      subject: "[Ansible] [F5-Renew-Cert] [CR-{{ '%010d' | format((f5_email_object | default([{'ansible_job_id': 0}]))[0].ansible_job_id | int) }}-001] Domain Renewal Information [Expiry Date: {{ (f5_email_object | default([{'f5_current_client_cert': {'expiration_date': 'N/A'}}]))[0].f5_current_client_cert.expiration_date }} ]"
+      body: "{{ lookup('ansible.builtin.template', 'templates/email.j2' ) }}"
+      subtype: "html"
+    run_once: true
+    delegate_to: localhost 
+    when: f5_email_object is defined and (f5_email_object | length > 0)

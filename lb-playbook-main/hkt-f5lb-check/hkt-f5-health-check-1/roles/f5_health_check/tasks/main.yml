@@ -1,0 +1,7 @@
+---
+- name: Include CyberArk credential retrieval tasks
+  ansible.builtin.include_tasks: cyberark.yml
+  when: use_cyberark | bool
+
+- name: Include F5 health check tasks
+  ansible.builtin.include_tasks: health_checks.yml

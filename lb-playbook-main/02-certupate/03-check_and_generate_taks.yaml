@@ -1,0 +1,49 @@
+---
+# PLAY 1: Download and Process Certs (Runs ONCE on Localhost)
+- name: F5 Cert Pre-processing (SFTP)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    PROCESSED_FOLDER_NAME: processed
+    SUFFIX_SCHEDULED: scheduled
+    SUFFIX_DOING: doing
+  tasks:
+    - name: Process SFTP Certificates
+      ansible.builtin.include_tasks: sub-tasks/03-sftp-cert-processing.yml
+
+    - name: Set global fact for file list
+      ansible.builtin.set_fact:
+        global_f5_cert_name_list: "{{ f5_cert_name_list }}"
+        global_f5_has_file_to_be_processed: "{{ f5_has_file_to_be_processed }}"
+
+# PLAY 2: Check All F5 Devices (Runs in PARALLEL)
+- name: F5 Check and Generate Task
+  hosts: all
+  gather_facts: false
+  
+  vars:
+    f5_ansible_host: "{{ inventory_hostname }}"
+    f5_cert_name_list: "{{ hostvars['localhost']['global_f5_cert_name_list'] | default([]) }}"
+    f5_has_file_to_be_processed: "{{ hostvars['localhost']['global_f5_has_file_to_be_processed'] | default(false) }}"
+
+  tasks:
+    - name: Include Main Tasks (Runs in Parallel for each host)
+      ansible.builtin.include_tasks: sub-tasks/03-cert-renew-main.yml
+      when: f5_has_file_to_be_processed
+
+    - name: Aggregate Results from All Active Hosts
+      ansible.builtin.set_fact:
+        combined_f5_results: "{{ combined_f5_results | default([]) + hostvars[item]['f5_profile_virtual_server_tobe_updated_with_profile_all_certs'] | default([]) }}"
+      loop: "{{ ansible_play_hosts }}"
+      run_once: true
+      delegate_to: localhost
+      when: f5_has_file_to_be_processed
+
+    - name: Pass Aggregated Results to Next Workflow Job
+      ansible.builtin.set_stats:
+        data:
+          f5_profile_virtual_server_tobe_updated_with_profile_all_certs: "{{ combined_f5_results | unique }}"
+      run_once: true
+      delegate_to: localhost
+      when: f5_has_file_to_be_processed

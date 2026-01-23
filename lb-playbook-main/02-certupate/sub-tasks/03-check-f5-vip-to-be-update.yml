@@ -1,0 +1,290 @@
+    - name: Printout F5 Names to check
+      ansible.builtin.debug: 
+        msg:  "f5_hostname_to_check: {{ f5_hostname_to_check }}"
+      delegate_to: localhost    
+
+    - name: Setup provider
+      ansible.builtin.set_fact:
+        provider:
+          server: "{{ f5_ansible_host }}"
+          user: "{{ f5_ui_username }}"
+          password: "{{ f5_ui_password }}"
+          server_port: "443"
+          no_f5_teem: "false"
+          validate_certs: false
+      no_log: True
+
+    - name : Get BIG-IP failover status
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh show sys failover"
+      delegate_to: localhost
+      register: f5_failoverStatus 
+
+# for IP in $(cat /tmp/result.txt); do echo ${IP}; curl -sk https://${IP}/tmui/login.jsp | tr -d '\n' |egrep -o 'Hostname(.*)IP\ Address' | egrep -o 'title=\"(.*)\"'|egrep -o '"(.*)"' |tr -d '"'; done
+    - name: Run TMSH get hostname
+      f5networks.f5_modules.bigip_command:
+        commands: 'tmsh list /sys global-settings hostname |grep hostname'
+        provider: "{{ provider }}"
+      register: f5_hostname_result
+      delegate_to: localhost
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Get local year in string
+      ansible.builtin.command: "date +%Y"
+      register: f5_current_year_in_string_command
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - f5_current_year_in_string is not defined
+      delegate_to: localhost
+      
+    - name: Set local year in string
+      ansible.builtin.set_fact: 
+        f5_current_year_in_string: "{{ f5_current_year_in_string_command.stdout }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - f5_current_year_in_string is not defined
+      delegate_to: localhost
+      
+    - name: Print current year in string
+      ansible.builtin.debug: 
+        msg: "{{ f5_current_year_in_string  }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      delegate_to: localhost
+
+    - name: Gather F5 Facts
+      f5networks.f5_modules.bigip_device_info:
+        gather_subset: 
+          - ssl-certs
+          - client-ssl-profiles
+          - server-ssl-profiles
+          - virtual-servers
+          - irules
+        provider: "{{ provider }}"
+      register: bigip_facts_result
+      delegate_to: localhost
+      when: "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: write result to local
+      ansible.builtin.copy:
+        content: "{{ bigip_facts_result }}"
+        dest: "/tmp/bigip_facts_result_{{ inventory_hostname }}.json" 
+      when: "'active' in f5_failoverStatus['stdout'][0]"
+      delegate_to: localhost
+        
+    - name: Find out the cert to replace
+      ansible.builtin.set_fact:
+        f5_cert_to_update: "{{ f5_cert_to_update |default([]) + [ bigip_facts_result_item ]  }}"
+      loop: "{{ bigip_facts_result.ssl_certs }}"
+      loop_control: 
+        label: "{{ bigip_facts_result_item.full_path }}"
+        loop_var: bigip_facts_result_item
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_hostname_to_check in bigip_facts_result_item.subject|default('') or f5_hostname_to_check in bigip_facts_result_item.subject_alternative_name|default('')"
+
+    - name: Print certificate to be updated
+      ansible.builtin.debug:
+        msg: "{{ f5_cert_to_update }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Find out the client ssl_profile to be copied
+      ansible.builtin.set_fact:
+        f5_client_profile_to_update: "{{ f5_client_profile_to_update |default([]) + [ f5_cert_to_update_item[1] ]  }}"
+      loop: "{{ f5_cert_to_update | product(bigip_facts_result.client_ssl_profiles)|list  }}"
+      loop_control: 
+        label: "{{ f5_cert_to_update_item[0].name }} - {{ f5_cert_to_update_item[1].name }}"
+        loop_var: f5_cert_to_update_item
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_cert_to_update_item[0].full_path  == f5_cert_to_update_item[1].certificate_file |default('') or f5_cert_to_update_item[0].full_path  == f5_cert_to_update_item[1].chain_file|default('') or f5_cert_to_update_item[0].full_path  == f5_cert_to_update_item[1].key_file|default('') "
+        
+    - name: Print client ssl profiles to be copied
+      ansible.builtin.debug:
+        msg: "{{ f5_client_profile_to_update }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+       
+    - name: Find out the server ssl_profile to be copied
+      ansible.builtin.set_fact:
+        f5_server_profile_to_update: "{{ f5_server_profile_to_update |default([]) + [ f5_cert_to_update_item[1] ]  }}"
+      loop: "{{ f5_cert_to_update | product(bigip_facts_result.server_ssl_profiles)|list  }}"
+      loop_control: 
+        label: "{{ f5_cert_to_update_item[0].name }} - {{ f5_cert_to_update_item[1].name }}"
+        loop_var: f5_cert_to_update_item
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_cert_to_update_item[0].full_path  == f5_cert_to_update_item[1].key |default('') or f5_cert_to_update_item[0].full_path  == f5_cert_to_update_item[1].cert|default('') or f5_cert_to_update_item[0].full_path  == f5_cert_to_update_item[1].ca_file|default('') "
+
+    - name: Check if there is server profile to update
+      ansible.builtin.set_fact:
+        f5_has_server_profile_to_update: true
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - f5_server_profile_to_update is defined and ( f5_server_profile_to_update|length > 0 )
+
+    - name: Print server ssl profiles to be copied
+      ansible.builtin.debug:
+        msg: "{{ f5_server_profile_to_update }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Find out client ssl_profile in use in vserver 
+      ansible.builtin.set_fact:
+        f5_client_profile_to_copy_in_server: "{{ f5_client_profile_to_copy_in_server |default([]) + [ f5_client_profile_to_update_item[0] | combine({ 'virtual_server': f5_client_profile_to_update_item[1].full_path, 'virtual_server_address': f5_client_profile_to_update_item[1].destination_address|string+':'+f5_client_profile_to_update_item[1].destination_port|string } ) | combine({'virtual_server_profile_list': f5_client_profile_to_update_item[1].profiles }) ]  }}"
+      loop: "{{  f5_client_profile_to_update  | product(bigip_facts_result.virtual_servers)|list  }}"
+      loop_control: 
+        label: "{{ f5_client_profile_to_update_item[0].name }} - {{ f5_client_profile_to_update_item[1].name }}"
+        loop_var: f5_client_profile_to_update_item
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_client_profile_to_update_item[1].profiles | selectattr('full_path','equalto',f5_client_profile_to_update_item[0].full_path ) | list | count > 0 "
+
+    - name: Print client ssl profiles to be copied
+      ansible.builtin.debug:
+        msg: "{{ f5_client_profile_to_copy_in_server }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Find out server ssl_profile in use in vserver 
+      ansible.builtin.set_fact:
+        f5_server_profile_to_copy_in_server: "{{ f5_server_profile_to_copy_in_server |default([]) + [ f5_server_profile_to_update_item[0] | combine({ 'virtual_server': f5_server_profile_to_update_item[1].full_path,  'virtual_server_address': f5_server_profile_to_update_item[1].destination_address|string+':'+f5_server_profile_to_update_item[1].destination_port|string } ) | combine({'virtual_server_profile_list': f5_server_profile_to_update_item[1].profiles }) ]  }}"
+      loop: "{{  f5_server_profile_to_update  | product(bigip_facts_result.virtual_servers)|list  }}"
+      loop_control: 
+        label: "{{ f5_server_profile_to_update_item[0].name }} - {{ f5_server_profile_to_update_item[1].name }}"
+        loop_var: f5_server_profile_to_update_item
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_server_profile_to_update_item[1].profiles | selectattr('full_path','equalto',f5_server_profile_to_update_item[0].full_path ) | list | count > 0 "
+
+    - name: Print vsserver server ssl profiles to be copied
+      ansible.builtin.debug:
+        msg: "{{ f5_server_profile_to_copy_in_server }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Get SSL Client Profile
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh list ltm profile client-ssl {{ item }} | head -n-1  |tail -n +2 |grep -v inherit-ca-certkeychain |grep -v inherit-certkeychain | sed 's/cert-key-chain/cert-key-chain\ add/g' | tr -d '\n'"
+      delegate_to: localhost
+      register: f5_profile_client_ssl
+      loop: "{{ f5_client_profile_to_copy_in_server | map(attribute='name') |unique }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Get SSL Server Profile
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh list ltm profile server-ssl {{ item }} | head -n-1  |tail -n +2 | tr -d '\n'"
+      delegate_to: localhost
+      register: f5_profile_server_ssl
+      loop: "{{ f5_server_profile_to_copy_in_server | map(attribute='name') |unique }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Update Virtual Server (client ssl)
+      ansible.builtin.set_fact: 
+        f5_profile_virtual_server_tobe_updated_with_profile_client: |
+          {% set ns = namespace ( cert_list = {} )  %}
+          {% for f5_cert_single in f5_cert_to_update %}
+          {% if f5_cert_single.full_path == f5_client_profile_to_copy_in_server_item[0].certificate_file  %}
+          {% set  ns.cert_list = f5_cert_single %}
+          {% endif %}
+          {% endfor %}
+          {% set _output = { 'profile_full_path':f5_client_profile_to_copy_in_server_item[0].full_path, 'virtual_server': f5_client_profile_to_copy_in_server_item[0].virtual_server, 'virtual_server_address': f5_client_profile_to_copy_in_server_item[0].virtual_server_address, 'client_cert': ns.cert_list } %}
+          {{ f5_profile_virtual_server_tobe_updated_with_profile_client |default([]) +  [ _output ] }}
+      delegate_to: localhost
+      loop: "{{ f5_client_profile_to_copy_in_server  |product( f5_profile_client_ssl.results | map(attribute='item') |unique )}}"
+      loop_control: 
+        label: "{{ f5_client_profile_to_copy_in_server_item[0].virtual_server }} - {{ f5_client_profile_to_copy_in_server_item[1] }}"
+        loop_var: f5_client_profile_to_copy_in_server_item
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Print Virtual Server Profile to be updated (Client ssl)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile_client }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Update Virtual Server (server ssl)
+      ansible.builtin.set_fact: 
+        f5_profile_virtual_server_tobe_updated_with_profile_server: |
+          {% set ns = namespace (cert_list={})  %}
+          {% for f5_cert_single in f5_cert_to_update %}
+          {% if f5_cert_single.full_path == f5_server_profile_to_copy_in_server_item[0].cert  %}
+          {% set  ns.cert_list = f5_cert_single %}
+          {% endif %}
+          {% endfor %}
+          {% set _output = { 'profile_full_path':f5_server_profile_to_copy_in_server_item[0].full_path,'virtual_server': f5_server_profile_to_copy_in_server_item[0].virtual_server, 'virtual_server_address': f5_server_profile_to_copy_in_server_item[0].virtual_server_address,'server_cert': ns.cert_list } %}
+          {{ f5_profile_virtual_server_tobe_updated_with_profile_server |default([]) +  [ _output ] }}
+      delegate_to: localhost
+      loop: "{{ f5_server_profile_to_copy_in_server  |product( f5_profile_server_ssl.results | map(attribute='item') |unique )}}"
+      loop_control: 
+        label: "{{ f5_server_profile_to_copy_in_server_item[0].virtual_server }} - {{ f5_server_profile_to_copy_in_server_item[1] }}"
+        loop_var: f5_server_profile_to_copy_in_server_item
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Print Virtual Server Profile to be updated (server ssl)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile_server }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Merge Virtual Server List (client + server)
+      ansible.builtin.set_fact: 
+        f5_profile_virtual_server_tobe_updated_with_profile_all: |
+          {% set ns = namespace (profile_lists = [], output_lists =[])  %}
+          {% for client_vs in  f5_profile_virtual_server_tobe_updated_with_profile_client %}
+          {% for server_vs in f5_profile_virtual_server_tobe_updated_with_profile_server %}
+          {% if client_vs.virtual_server == server_vs.virtual_server %}
+          {% set ns.output_lists = ns.output_lists + [ { 'f5_device_host_or_ip': f5_ansible_host, 'device_name': f5_hostname_result.stdout[0].split(' ')[1] +'( active )','virtual_server': client_vs.virtual_server, 'client_profile_full_path': client_vs.profile_full_path, 'server_profile_full_path': server_vs.profile_full_path, 'virtual_server_address': client_vs.virtual_server_address, 'client_cert':client_vs.client_cert, 'server_cert':server_vs.server_cert, 'uploaded_cert':f5_hostname_to_check_list } ] %}
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% for client_vs in f5_profile_virtual_server_tobe_updated_with_profile_client %}
+          {% if client_vs.virtual_server not in ( f5_profile_virtual_server_tobe_updated_with_profile_server |map(attribute='virtual_server')|list)  %}
+          {% set ns.output_lists = ns.output_lists + [ { 'f5_device_host_or_ip': f5_ansible_host, 'device_name': f5_hostname_result.stdout[0].split(' ')[1] +'( active )','virtual_server': client_vs.virtual_server, 'client_profile_full_path': client_vs.profile_full_path, 'virtual_server_address': client_vs.virtual_server_address, 'client_cert':client_vs.client_cert, 'uploaded_cert':f5_hostname_to_check_list} ] %}
+          {% endif%}
+          {% endfor %}
+          {% for server_vs in f5_profile_virtual_server_tobe_updated_with_profile_server %}
+          {% if server_vs.virtual_server not in ( f5_profile_virtual_server_tobe_updated_with_profile_client |map(attribute='virtual_server')|list)  %}
+          {% set ns.output_lists = ns.output_lists + [ { 'f5_device_host_or_ip': f5_ansible_host,  'device_name': f5_hostname_result.stdout[0].split(' ')[1] +'( active )', 'virtual_server': server_vs.virtual_server, 'server_profile_full_path': server_vs.profile_full_path,'virtual_server_address': server_vs.virtual_server_address, 'server_cert':server_vs.server_cert, 'uploaded_cert':f5_hostname_to_check_list  } ] %}
+          {% endif%}
+          {% endfor %}
+          {{ ns.output_lists }}
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Print Virtual Server Profile to be updated (all)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile_all }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Set Virtual Server Profile to be updated (all certs)
+      ansible.builtin.set_fact:
+        f5_profile_virtual_server_tobe_updated_with_profile_all_certs: "{{  f5_profile_virtual_server_tobe_updated_with_profile_all_certs |default([]) + f5_profile_virtual_server_tobe_updated_with_profile_all }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Print Virtual Server Profile to be updated (all certs)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile_all_certs }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"      
+
+      # get pool
+      #show ltm pool all members field-fmt |grep "ltm\ pool\|active-member-cnt\|addr\|monitor-status"

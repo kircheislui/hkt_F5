@@ -1,0 +1,53 @@
+---
+# variables used
+#    - f5_hostname_to_check: "sbmvno.hkcsl.com"
+#    - f5_ssl_verify_jump_host: '10.168.12.206'
+#    - f5_ssl_verify_jump_user: 'root'
+#    - f5_ssl_verify_jump_pass: 'adminroot123'
+
+    - name: Get UUID for Tempfile Processing
+      ansible.builtin.set_fact: 
+        f5_cert_check_tmp_UUID: "{{  '' | to_uuid }}"
+      delegate_to: localhost
+
+    - name: Retrieve SSL certificate for public access via proxy
+      ansible.builtin.shell: "echo | openssl s_client -proxy app-proxy.pccw.com:8080 -showcerts -servername {{ f5_hostname_to_check }} -connect {{ f5_hostname_to_check }}:443 </dev/null "
+      register: f5_cert_result
+      no_log: False
+      delegate_to: localhost
+
+    - name: Print Result
+      ansible.builtin.debug: 
+        msg: "{{ f5_cert_result.stdout_lines }}"
+      delegate_to: localhost
+
+    - name: Write the cert to local temp path
+      ansible.builtin.copy: 
+        dest: "/tmp/{{ f5_hostname_to_check }}_{{ f5_cert_check_tmp_UUID }}.crt"
+        content: "{{ f5_cert_result.stdout }}"
+      delegate_to: localhost
+
+    - name: Load the cert to local temp path
+      community.crypto.x509_certificate_info:
+        path: "/tmp/{{ f5_hostname_to_check }}_{{ f5_cert_check_tmp_UUID }}.crt"
+      delegate_to: localhost
+      register: f5_playbook_cert
+
+    - name: Print Result
+      ansible.builtin.debug: 
+        msg: "{{ f5_playbook_cert }}"
+      delegate_to: localhost
+
+    - name: Print out cert info
+      ansible.builtin.include_tasks: sub-tasks/01-checkcert-common
+
+    - name: Clean up tmp cert created
+      ansible.builtin.file:
+        path:  "/tmp/{{ f5_hostname_to_check }}_{{ f5_cert_check_tmp_UUID }}.crt"
+        state: absent
+      delegate_to: localhost
+    
+    - name: Output result to fact
+      ansible.builtin.set_fact:
+        f5_check_ssl_cert_in_public: "{{ f5_playbook_cert | combine({ 'days_to_expire': f5_playbook_number_of_expiry_day } ) }}"
+      delegate_to: localhost

@@ -1,0 +1,5 @@
+    - name: Copy the file to localhost
+      ansible.builtin.shell: |
+        sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no'  {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/certs_uat/ <<<"rename ./{{ PROCESSED_FOLDER_NAME }}/{{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.{{ SUFFIX_DOING}} ./{{ PROCESSED_FOLDER_NAME }}/{{ f5_cert_deploy_object_single.uploaded_cert.file_timestamp }}.{{ f5_cert_deploy_object_single.uploaded_cert.filename }}.{{ SUFFIX_DONE}} "
+
+      delegate_to: localhost

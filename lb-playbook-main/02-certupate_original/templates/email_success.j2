@@ -1,0 +1,70 @@
+To whom it may concern:
+</br>
+</br>
+Please review the following public certificate information:
+</br>
+</br>
+
+Public Cert Checking: </br>
+<table {{ f5_email_table_style }}>
+ <tr {{ f5_email_table_style }}>
+    <th {{ f5_email_table_style }}>OK?</th>
+    <th {{ f5_email_table_style }}>Type</th>
+    <th {{ f5_email_table_style }}>Uploaded</th>
+    <th {{ f5_email_table_style }}>Get from Public</th>
+ </tr>
+ {% for cert in f5_playbook_cert_list %}
+ {% if cert.names|join(', ') == f5_cert_deploy_object[0].uploaded_cert.names | join(', ') %}
+ <tr {{ f5_email_table_style }}>
+   <td {{ f5_email_table_style }}>OK</td>
+ {% else %}
+ <tr style='border: 1px solid; background: red'>
+   <td {{ f5_email_table_style }}>Failed</td>
+ {% endif %}
+    <td {{ f5_email_table_style }}>Public Cert Name</td>
+    <td {{ f5_email_table_style }}>{{ f5_cert_deploy_object[0].uploaded_cert.names | join(', ') }}</td>
+    <td {{ f5_email_table_style }}>{{ cert.names | join(', ') }}</td>
+ </tr>
+{% if cert.expiration_date == f5_cert_deploy_object[0].uploaded_cert.expiration_date %}
+  <tr {{ f5_email_table_style }}>
+  <td {{ f5_email_table_style }}>OK</td>
+{% else %}
+  <tr style='border: 1px solid; background: red'>
+    <td {{ f5_email_table_style }}>Failed</td>
+{% endif %}
+    <td {{ f5_email_table_style }}>Exipration Date</td>
+    <td {{ f5_email_table_style }}>{{ f5_cert_deploy_object[0].uploaded_cert.expiration_date }}</td>
+    <td {{ f5_email_table_style }}>{{ cert.expiration_date }}</td>
+ </tr>
+ {% endfor %}
+</table>
+</br>
+</br>
+F5 Cert expiry date Checking: </br>
+<table {{ f5_email_table_style }}>
+ <tr {{ f5_email_table_style }}>
+    <th {{ f5_email_table_style }}>OK?</th>
+    <th {{ f5_email_table_style }}>Virtual Server</th>
+    <th {{ f5_email_table_style }}>Uploaded</th>
+    <th {{ f5_email_table_style }}>F5</th>
+ </tr>
+ {% for f5_certs in bigip_facts_result_check.ssl_certs %}
+ {% for f5_object in f5_cert_deploy_object %}
+ {% if f5_cert_deploy_cert_name in f5_certs.full_path  %}
+{% if f5_object.uploaded_cert.expiration_date == f5_certs.expiration_date %}
+  <tr {{ f5_email_table_style }}>
+  <td {{ f5_email_table_style }}>OK</td>
+{% else %}
+  <tr style='border: 1px solid; background: red'>
+    <td {{ f5_email_table_style }}>Failed</td>
+{% endif %}
+    <td {{ f5_email_table_style }}>{{ f5_object.virtual_server }}</td>
+    <td {{ f5_email_table_style }}>{{ f5_object.uploaded_cert.expiration_date }} </td>
+    <td {{ f5_email_table_style }}>{{ f5_certs.expiration_date }}</td>
+ </tr>
+ {% endif %}
+ {% endfor %}
+ {% endfor %}
+</table>
+<br/>
+Please take the necessary actions based on this information.

@@ -1,0 +1,120 @@
+    - name : Update Virtual Server (client ssl)
+      ansible.builtin.set_fact: 
+        f5_profile_virtual_server_tobe_updated_with_profile_client: |
+          {% set ns = namespace (profile_lists = [])  %}
+          {% for profile in f5_update_virtual_server_to_be_udpated.profiles %}
+          {% if profile.full_path == client_ssl_fullpath %}
+          {% set  ns.profile_lists = ns.profile_lists + [ {'name':  f5_profile_client_profile_new_name, 'context': profile.context } ]   %}
+          {% else %}
+          {% set  ns.profile_lists = ns.profile_lists + [ profile ]   %}
+          {% endif %}
+          {% endfor %}
+          {% set _output = { 'virtual_server': f5_update_virtual_server_to_be_udpated.name, 'virtual_server_address': f5_cert_deploy_object_single.virtual_server_address, 'profile_list': ns.profile_lists } %}
+          {{ [ _output ] }}
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "client_ssl_fullpath != 'NA' "
+
+    - name: Print Virtual Server Profile to be updated (Client ssl)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile_client }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Update Virtual Server (server ssl)
+      ansible.builtin.set_fact: 
+        f5_profile_virtual_server_tobe_updated_with_profile_server: |
+          {% set ns = namespace (profile_lists = [])  %}
+          {% for profile in f5_update_virtual_server_to_be_udpated.profiles %}
+          {% if profile.full_path == server_ssl_fullpath %}
+          {% set  ns.profile_lists = ns.profile_lists + [ {'name':  f5_profile_server_profile_new_name, 'context': profile.context } ]   %}
+          {% else %}
+          {% set  ns.profile_lists = ns.profile_lists + [ profile ]   %}
+          {% endif %}
+          {% endfor %}
+          {% set _output = { 'virtual_server': f5_update_virtual_server_to_be_udpated.name, 'virtual_server_address': f5_cert_deploy_object_single.virtual_server_address, 'profile_list': ns.profile_lists } %}
+          {{ [ _output ] }}
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "server_ssl_fullpath != 'NA' "
+
+    - name: Print Virtual Server Profile to be updated (server ssl)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile_server }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Merge Virtual Server List (client + server)
+      ansible.builtin.set_fact: 
+        f5_profile_virtual_server_tobe_updated_with_profile: |
+          {% set ns = namespace (profile_lists = [], output_lists =[])  %}
+          {% for client_vs in  f5_profile_virtual_server_tobe_updated_with_profile_client %}
+          {% for server_vs in f5_profile_virtual_server_tobe_updated_with_profile_server %}
+          {% if client_vs.virtual_server == server_vs.virtual_server %}
+          {% set  ns.profile_lists = []   %}
+          {% for client_profile in client_vs.profile_list %}
+          {% for server_profile in server_vs.profile_list %}
+          {% if client_profile.context == server_profile.context and client_profile.context == 'server-side' and client_profile.full_path|default('') != server_profile.full_path |default('') %}
+          {% set  ns.profile_lists = ns.profile_lists + [ server_profile ]   %}
+          {% elif client_profile.context == server_profile.context and client_profile.context == 'client-side' and client_profile.full_path|default('') != server_profile.full_path |default('') %}
+          {% set  ns.profile_lists = ns.profile_lists + [ client_profile ]   %}
+          {% elif client_profile.context == server_profile.context and client_profile.full_path|default('') == server_profile.full_path|default('') %}
+          {% set  ns.profile_lists = ns.profile_lists + [ client_profile ]   %}
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% set ns.output_lists = ns.output_lists + [ { 'virtual_server': client_vs.virtual_server,  'virtual_server_address': client_vs.virtual_server_address, 'profile_list': ns.profile_lists} ] %}
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% for client_vs in f5_profile_virtual_server_tobe_updated_with_profile_client %}
+          {% if client_vs.virtual_server not in ( f5_profile_virtual_server_tobe_updated_with_profile_server |map(attribute='virtual_server')|list)  %}
+          {% set ns.output_lists = ns.output_lists + [ { 'virtual_server': client_vs.virtual_server, 'virtual_server_address': client_vs.virtual_server_address, 'profile_list': client_vs.profile_list } ] %}
+          {% endif%}
+          {% endfor %}
+          {% for server_vs in f5_profile_virtual_server_tobe_updated_with_profile_server %}
+          {% if server_vs.virtual_server not in ( f5_profile_virtual_server_tobe_updated_with_profile_client |map(attribute='virtual_server')|list)  %}
+          {% set ns.output_lists = ns.output_lists + [ { 'virtual_server': server_vs.virtual_server, 'virtual_server_address': server_vs.virtual_server_address, 'profile_list': server_vs.profile_list } ] %}
+          {% endif%}
+          {% endfor %}
+          {{ ns.output_lists }}
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Print Virtual Server Profile to be updated (all)
+      ansible.builtin.debug:
+        msg: "{{  f5_profile_virtual_server_tobe_updated_with_profile }}"
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Update Virtual Server
+      f5networks.f5_modules.bigip_virtual_server:
+        name: "{{ f5_profile_virtual_server_tobe_updated_with_profile[0].virtual_server }}"
+        profiles: "{{ f5_profile_virtual_server_tobe_updated_with_profile[0].profile_list }}"
+        provider: "{{ provider }}"
+      delegate_to: localhost
+      register: f5_update_virtual_server_result
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+#    - name : Verify Virtual Server Updated
+#      ansible.builtin.shell: |
+#        sshpass -p "{{ f5_ssl_verify_jump_pass }}" ssh -o StrictHostKeyChecking=no  "{{ f5_ssl_verify_jump_user }}@{{ f5_ssl_verify_jump_host }}" bash -c "echo | openssl s_client -connect {{ item.virtual_server_address }} 2>/dev/null | openssl x509 -noout -subject -issuer -enddate " 
+#      delegate_to: localhost
+#      register: f5_verify_virtual_server_result
+#      loop: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all }}"
+#      loop_control: 
+#        label: "{{ item.virtual_server }}"
+#      when:
+#      - "'active' in f5_failoverStatus['stdout'][0]"
+#      - "f5_ssl_verify_jump_host is defined and f5_ssl_verify_jump_user is defined and f5_ssl_verify_jump_pass is defined"
+#
+#
+#    - name: Print Virtual Server Profile to be updated (all)
+#      ansible.builtin.debug:
+#        msg: "{{  f5_verify_virtual_server_result  }}"
+#      when:
+#      - "'active' in f5_failoverStatus['stdout'][0]"

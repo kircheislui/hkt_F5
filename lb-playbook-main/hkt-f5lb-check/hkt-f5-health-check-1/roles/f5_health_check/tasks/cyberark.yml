@@ -1,0 +1,18 @@
+---
+- name: Retrieve credentials from CyberArk PAS
+  cyberark.pas.cyberark_credential:
+    api_base_url: "{{ cyberark.api_base_url }}"
+    app_id: "{{ cyberark.app_id }}"
+    query: "{{ cyberark.query }}"
+    validate_certs: "{{ cyberark.validate_certs }}"
+    client_cert: "{{ cyberark.client_cert }}"
+    client_key: "{{ cyberark.client_key }}"
+  register: credentials_uat
+  no_log: true
+  delegate_to: localhost
+
+- name: Set F5 password from CyberArk
+  ansible.builtin.set_fact:
+    ansible_password: "{{ credentials_uat.result.Content }}"
+    cacheable: yes
+  no_log: true

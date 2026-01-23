@@ -1,0 +1,23 @@
+---
+# --- CyberArk Configuration ---
+# Set to true to enable credential retrieval from CyberArk, false to disable.
+use_cyberark: false
+cyberark:
+  api_base_url: "https://pam.pccw.com/"
+  app_id: "APP_ANSIBLE_HOST_UAT_1"
+  # The query uses a variable that will be resolved for each host
+  query: "Safe=IT_F5_TS_UAT_ADMIN;username=admin;address={{ hostvars[inventory_hostname]['ansible_host'] }}"
+  validate_certs: false
+  client_cert: /cyberark_key_uat/cert.crt
+  client_key: /cyberark_key_uat/private.key
+
+# --- Email Notification Configuration ---
+email:
+  smtp_server: "smtp.pccw.com"
+  smtp_port: 25
+  from_address: "osp-alertmgr@pccw.com"
+  to_recipients: "gary.wl.lai@pccw.com,PITSOPS3@pccw.com,PITSOPS5@pccw.com,PITSOPS6@pccw.com"
+  subject: "F5 Health Check Report - {{ report_timestamp }}"
+
+# --- Report Configuration ---
+report_output_path: "/tmp/f5_health_check_reports"

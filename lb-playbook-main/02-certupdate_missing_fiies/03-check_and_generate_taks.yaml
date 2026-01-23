@@ -1,0 +1,43 @@
+---
+#
+- name: F5 Check and Generate Task
+  hosts: all
+  gather_facts: false
+  vars:
+  - PROCESSED_FOLDER_NAME: processed
+  - SUFFIX_SCHEDULED: scheduled
+  - SUFFIX_DOING: doing
+  tasks:
+
+      # --- ADDED THIS TASK ---
+    - name: Initialize result variable to empty list
+      ansible.builtin.set_fact:
+        f5_profile_virtual_server_tobe_updated_with_profile_all_certs: []
+      run_once: true
+    # ---------------------
+    
+    - name: Print out all hosts
+      ansible.builtin.debug:
+        msg: "{{ ansible_play_hosts_all }}"
+      run_once: true
+
+    - name: Inclue Main Tasks as loop
+      ansible.builtin.include_tasks: sub-tasks/03-cert-renew-main.yml
+      vars:
+        f5_ansible_host: "{{ f5_cert_renew_hosts_item }}"
+      run_once: true 
+      loop: "{{ ansible_play_hosts_all }}"
+      loop_control:
+        loop_var: f5_cert_renew_hosts_item
+
+    - name: Print out f5_profile_virtual_server_tobe_updated_with_profile_all_certs
+      ansible.builtin.debug:
+        msg: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | default([]) }}"
+      run_once: true
+
+    - name: Setting return to email
+      ansible.builtin.set_stats:
+        data:
+          f5_profile_virtual_server_tobe_updated_with_profile_all_certs: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs }}"
+      delegate_to: localhost
+      run_once: true

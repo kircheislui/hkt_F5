@@ -1,0 +1,53 @@
+- name: Initialize vairables
+  ansible.builtin.set_fact:
+    f5_cert_to_update: []
+    f5_client_profile_to_update: []
+    f5_server_profile_to_update: []
+    f5_client_profile_to_copy_in_server: []
+    f5_server_profile_to_copy_in_server: []
+    f5_profile_virtual_server_tobe_updated_with_profile_client: []
+    f5_profile_virtual_server_tobe_updated_with_profile_server:  [] 
+
+# --- NEW: Count existing results ---
+- name: Capture Result Count Before
+  ansible.builtin.set_fact:
+    result_count_before: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | default([]) | length }}"
+# -----------------------------------
+
+- name: Check F5 VIP and Profiles to be updated
+  ansible.builtin.include_tasks: sub-tasks/03-check-f5-vip-to-be-update.yml
+  vars:
+    f5_hostname_to_check: "{{ f5_hostname_to_check_list_item }}"      
+  loop: "{{ f5_hostname_to_check_list.names }}"
+  loop_control:
+    loop_var: f5_hostname_to_check_list_item
+  register: f5_looped_hostname_to_check
+
+# --- NEW: Check if we found anything. If NOT, add a "Not Found" entry ---
+- name: Capture Result Count After
+  ansible.builtin.set_fact:
+    result_count_after: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | default([]) | length }}"
+
+- name: Append Not Found Entry if No Results for this Host
+  ansible.builtin.set_fact:
+    f5_profile_virtual_server_tobe_updated_with_profile_all_certs: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | default([]) + [ not_found_item ] }}"
+  vars:
+    not_found_item:
+      device_name: "{{ f5_device_name_report_string }}"
+      virtual_server: "None"
+      virtual_server_address: "N/A"
+      client_cert:
+        full_path: "Not Found on F5"
+        expiration_date: "N/A"
+        subject_alternative_name: "N/A"
+      server_cert:
+        full_path: "Not Found on F5"
+        expiration_date: "N/A"
+        subject_alternative_name: "N/A"
+      uploaded_cert:
+        filename: "{{ f5_hostname_to_check_list.filename }}"
+        names: "{{ f5_hostname_to_check_list.names }}"
+        expiration_date: "{{ f5_hostname_to_check_list.expiration_date }}"
+        ansible_job_id: "{{ f5_hostname_to_check_list.ansible_job_id }}"
+  when: result_count_after == result_count_before
+# ------------------------------------------------------------------------

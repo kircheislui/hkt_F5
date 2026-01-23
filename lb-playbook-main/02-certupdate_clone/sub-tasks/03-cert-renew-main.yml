@@ -1,0 +1,55 @@
+- name: Setup provider
+  ansible.builtin.set_fact:
+    provider:
+      server: "{{ f5_ansible_host }}"
+      user: "{{ f5_ui_username }}"
+      password: "{{ f5_ui_password }}"
+      server_port: "443"
+      no_f5_teem: "false"
+      validate_certs: false
+
+- name: Check F5 Failover Status
+  f5networks.f5_modules.bigip_command:
+    provider: "{{ provider }}"
+    commands:
+      - "tmsh show sys failover"
+  delegate_to: localhost
+  register: f5_failoverStatus
+
+# --- NEW: Get Hostname Early (So we can report it even if Cert not found) ---
+- name: Get F5 System Hostname
+  f5networks.f5_modules.bigip_command:
+    provider: "{{ provider }}"
+    commands: "tmsh list /sys global-settings hostname | grep hostname"
+  register: f5_sys_hostname_raw
+  delegate_to: localhost
+
+- name: Set Hostname Fact
+  ansible.builtin.set_fact:
+    # Extracts 'hostname my-f5-device.com' -> 'my-f5-device.com'
+    f5_device_name_clean: "{{ f5_sys_hostname_raw.stdout[0].split()[1] | default(f5_ansible_host) }}"
+# ----------------------------------------------------------------------------
+
+- name: Gather F5 Facts (Optimized - Run Once)
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - ssl-certs
+      - client-ssl-profiles
+      - server-ssl-profiles
+      - virtual-servers
+      - irules
+    provider: "{{ provider }}"
+  register: bigip_facts_result_cached
+  delegate_to: localhost
+  when: "'active' in f5_failoverStatus['stdout'][0]"
+
+- name: Check F5 VIP and Profiles to be updated
+  ansible.builtin.include_tasks: sub-tasks/03-check-f5-vip-extra-dnsnames.yml
+  vars:
+    f5_hostname_to_check_list: "{{ f5_cert_name_list_item }}"
+    bigip_facts_result: "{{ bigip_facts_result_cached }}"
+    # Pass the formatted Device Name string down
+    f5_device_name_report_string: "{{ f5_device_name_clean }} ( {{ 'active' if 'active' in f5_failoverStatus.stdout[0] else 'standby' }} )"
+  loop: "{{ f5_cert_name_list }}"
+  loop_control:
+    loop_var: f5_cert_name_list_item

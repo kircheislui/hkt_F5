@@ -1,0 +1,47 @@
+- name: Print Variable
+  ansible.builtin.debug: 
+    msg: "f5_cert_deploy_cert_public_name: {{ f5_cert_deploy_cert_public_name }}"
+  delegate_to: localhost
+
+- name: Get UUID for Tempfile Processing
+  ansible.builtin.set_fact: 
+    f5_cert_check_tmp_UUID: "{{  '' | to_uuid }}"
+  delegate_to: localhost
+
+- name: Retrieve SSL certificate for public access via proxy
+  ansible.builtin.shell: "echo | openssl s_client -proxy app-proxy.pccw.com:8080 -showcerts -servername {{ f5_cert_deploy_cert_public_name }} -connect {{ f5_cert_deploy_cert_public_name }}:443 </dev/null "
+  register: f5_cert_result
+  no_log: False
+  delegate_to: localhost
+
+- name: Print Result
+  ansible.builtin.debug: 
+    msg: "{{ f5_cert_result.stdout_lines }}"
+  delegate_to: localhost
+
+- name: Write the cert to local temp path
+  ansible.builtin.copy: 
+    dest: "/tmp/{{ f5_cert_deploy_cert_public_name }}_{{ f5_cert_check_tmp_UUID }}.crt"
+    content: "{{ f5_cert_result.stdout }}"
+  delegate_to: localhost
+
+- name: Find out subjects and SAN
+  ansible.builtin.shell: |
+    openssl x509 -noout -subject -nameopt multiline -in /tmp/{{ f5_cert_deploy_cert_public_name }}_{{ f5_cert_check_tmp_UUID }}.crt |grep commonName | awk -F\= '{print $2}' |tr -d ' ' |tr '\n' ','
+    openssl x509 -noout -ext subjectAltName  -nameopt multiline -in /tmp/{{ f5_cert_deploy_cert_public_name }}_{{ f5_cert_check_tmp_UUID }}.crt |grep -v 'Subject Alternative Name'|tr -d ' '|sed 's/DNS\://g' |sed 's/IP\ Address\://g'| sed 's/Noextensionsincertificate//g'
+    openssl x509 -enddate -noout -in /tmp/{{ f5_cert_deploy_cert_public_name }}_{{ f5_cert_check_tmp_UUID }}.crt | awk -F\= '{print $2}'
+  delegate_to: localhost
+  register: f5_cert_public_info_output
+  run_once: True 
+
+- name: Set List of DNS Names 
+  ansible.builtin.set_fact:    
+    f5_playbook_cert_list: "{{ f5_playbook_cert_list|default([]) + [ { 'names': f5_cert_public_info_output.stdout_lines[0].split(',') |unique |reject('match', '^$'), 'expiration_date': f5_cert_public_info_output.stdout_lines[1] } ] }}"
+  delegate_to: localhost    
+  run_once: True  
+
+- name: Clean up tmp cert created
+  ansible.builtin.file:
+    path:  "/tmp/{{ f5_cert_deploy_cert_public_name }}_{{ f5_cert_check_tmp_UUID }}.crt"
+    state: absent
+  delegate_to: localhost

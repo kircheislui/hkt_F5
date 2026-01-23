@@ -1,0 +1,40 @@
+To whom it may concern:
+<br>
+<br>
+Please review the following VIP renewal information. Please login Ansible portal to start the job on schedule after approval completed: [F5-Renew-Cert][CR-{{ '%010d' | format((f5_email_object | default([{'ansible_job_id': 0}]))[0].ansible_job_id | int) }} ]
+<br>
+<br>
+Please visit below link for <a href="https://rhansbm04.pccw.com/#/templates?template.name=[F5-Renew-Cert][CR-{{ '%010d' | format((f5_email_object | default([{'ansible_job_id': 0}]))[0].ansible_job_id | int) }}-000]"> proceeding the task</a>
+<br>
+<br>
+{% for f5_object in f5_email_object %}
+<table {{ f5_email_table_style }} >
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >Device Name</td>
+    <td colspan=3 {{ f5_email_table_style }} >{{ f5_object.f5_device_name }} </td>
+ </tr>
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >VIP</td>
+    <td colspan=3 {{ f5_email_table_style }} >{{ f5_object.f5_vip }} </td>
+ </tr> 
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} ></td>
+    <td {{ f5_email_table_style }} >Uploaded Cert</td>
+    <td {{ f5_email_table_style }} >F5 Cert (Client)</td>
+    <td {{ f5_email_table_style }} >F5 Cert (Server)</td>
+ </tr>
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >DNS Names</td>
+    <td {{ f5_email_table_style }} >{{ f5_object.uploaded_cert.dns_names  }} </td>
+    <td {{ f5_email_table_style }} >{{ f5_object.f5_current_client_cert.dns_names }} </td>
+    <td {{ f5_email_table_style }} >{{ f5_object.f5_current_server_cert.dns_names }} </td>
+ </tr>
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >Expiration Date</td>
+    <td {{ f5_email_table_style }} >{{ f5_object.uploaded_cert.expiration_date }} </td>
+    <td {{ f5_email_table_style }} >{{ f5_object.f5_current_client_cert.expiration_date }} </td>
+    <td {{ f5_email_table_style }} >{{ f5_object.f5_current_server_cert.expiration_date }} </td>
+ </tr> 
+</table>
+<br>
+{% endfor %}

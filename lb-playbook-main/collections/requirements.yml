@@ -1,0 +1,6 @@
+collections:
+  #- name: f5networks.f5_modules
+  - name: cyberark.pas
+  - name: community.general
+  - name: f5networks.f5_modules
+  - name: f5networks.f5_bigip

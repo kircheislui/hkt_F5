@@ -1,0 +1,7 @@
+"Hostname","Checking Item","Checking Command / Method","Expected Result","Actual Result","Status"
+{% for host in hostvars.keys() %}
+{% if hostvars[host].health_check_results is defined %}{% for check in hostvars[host].health_check_results %}
+"{{ host }}","{{ check.item }}","{{ check.command }}","{{ check.expected }}","{{ check.actual | replace('"', '""') }}","{{ check.status }}"
+{% endfor %}{% else %}
+"{{ host }}","Data Retrieval","N/A","N/A","Could not retrieve health check data for this host.","Fail"
+{% endif %}{% endfor %}

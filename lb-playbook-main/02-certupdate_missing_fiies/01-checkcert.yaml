@@ -1,0 +1,113 @@
+---
+- name: Check SSL Cert
+  hosts: all
+  gather_facts: false
+
+#  vars:
+#    - f5_hostname_to_check: "sbmvno.hkcsl.com" #in Template
+#    - f5_ssl_verify_jump_host: '10.168.12.206' #in Survey
+#    - f5_ssl_verify_jump_user: 'root' #in Survey
+#    - f5_ssl_verify_jump_pass: 'adminroot123' #in Survey
+#    - f5_ssl_verify_public: True #in Survey
+#    - f5_workflow_to_update: "F5-Deploy-Cert" #in template
+#    - f5_schedule_to_update: "UpdateCert" #in template
+#    - f5_change_window: "22-02-2024 02:00" #in survey
+#    - ansible_tower_host: "rhansbm01.pccw.com" #in credential
+#    - ansible_tower_token: "cX1hTY9Pp5HwPUkUD3WqEVGmaLV44K" #in credential
+#    - ansible_tower_org: "Default" #in credential
+#    - f5_cert_expiry_thredshold: 150 #in tempalte
+  tasks:
+    - name: Setup provider
+      ansible.builtin.set_fact:
+        provider:
+          server: "{{ ansible_host }}"
+          user: "{{ f5_ui_username }}"
+          password: "{{ f5_ui_password }}"
+          server_port: "443"
+          no_f5_teem: "false"
+          validate_certs: false
+
+    - name : Get BIG-IP failover status
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh show sys failover"
+      delegate_to: localhost
+      register: f5_failoverStatus
+
+    - name: Inclue Check Cert Tasks for server
+      ansible.builtin.include_tasks: sub-tasks/01-checkcert-f5-server
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Inclue Check Cert Tasks for jumphost
+      ansible.builtin.include_tasks: sub-tasks/01-checkcert-jumphost
+      when:
+        - "f5_ssl_verify_jump_host is defined and f5_ssl_verify_jump_host|length > 0 "
+        - "f5_ssl_verify_jump_user is defined and f5_ssl_verify_jump_user|length > 0 "
+        - "f5_ssl_verify_jump_pass is defined and f5_ssl_verify_jump_pass|length > 0 "
+        - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Inclue Check Cert Tasks for public
+      ansible.builtin.include_tasks: sub-tasks/01-checkcert-public
+      when:
+        - "f5_ssl_verify_public is defined and f5_ssl_verify_public == 'True' "
+        - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Debug print f5_check_ssl_cert_in_server
+      ansible.builtin.debug:
+        msg: "{{ f5_check_ssl_cert_in_server }}"
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+      delegate_to: localhost
+
+
+    - name: Check if check expied less than threadshould in server
+      ansible.builtin.set_fact:
+        f5_cert_expired_boolean: True
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+        - "item|int < f5_cert_expiry_thredshold|int"
+      loop: "{{ f5_check_ssl_cert_in_server |map(attribute='days_to_expire') |list}}"
+      delegate_to: localhost
+
+    - name: Check if check expied less than threadshould in public
+      ansible.builtin.set_fact:
+        f5_cert_expired_boolean: True
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+        - "f5_check_ssl_cert_in_public is defined and f5_check_ssl_cert_in_public.days_to_expire is defined and f5_check_ssl_cert_in_public.days_to_expire|int < f5_cert_expiry_thredshold|int"
+      delegate_to: localhost
+
+    - name: Check if check expied less than threadshould in jumphost
+      ansible.builtin.set_fact:
+        f5_cert_expired_boolean: True
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+        - "f5_check_ssl_cert_in_jumphost is defined and f5_check_ssl_cert_in_jumphost.days_to_expire is defined and f5_check_ssl_cert_in_jumphost.days_to_expire|int < f5_cert_expiry_thredshold|int"
+      delegate_to: localhost
+
+
+    - name: Printout Results
+      ansible.builtin.debug:
+        msg: "{{ f5_cert_expired_boolean |default(False) }}"
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+      delegate_to: localhost
+
+
+    - name: Create Schedule for actual workflow
+      ansible.controller.schedule:
+        name: "{{  f5_schedule_to_update }}"
+        controller_host: "{{ ansible_tower_host }}"
+        controller_oauthtoken: "{{ ansible_tower_token }}"
+        organization: "{{ ansible_tower_org }}"
+        state: present
+        unified_job_template: "{{ f5_workflow_to_update }}"
+        rrule: "DTSTART;TZID=Asia/Hong_Kong:{{ ( f5_change_window  | to_datetime('%d-%m-%Y %H:%M')).strftime('%Y%m%dT%H%M%S') }} RRULE:INTERVAL=1;COUNT=1;FREQ=MINUTELY"
+        validate_certs: no
+        enabled: True
+      delegate_to: localhost
+      when:
+        - "'active' in f5_failoverStatus['stdout'][0]"
+        - f5_cert_expired_boolean is defined and f5_cert_expired_boolean

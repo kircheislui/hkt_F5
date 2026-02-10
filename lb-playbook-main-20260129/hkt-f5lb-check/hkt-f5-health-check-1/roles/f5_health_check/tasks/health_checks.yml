@@ -1,0 +1,164 @@
+---
+- name: Initialize list for health check results
+  ansible.builtin.set_fact:
+    health_check_results: []
+
+- name: Define F5 provider credentials for this host
+  ansible.builtin.set_fact:
+    f5_provider:
+      server: "{{ ansible_host }}"
+      user: "{{ f5_ui_username }}"
+      password: "{{ f5_ui_password }}"
+      validate_certs: false
+      server_port: 443
+      no_f5_teem: false
+  no_log: true
+
+# 1a. Gather BIG-IP device facts for system info, sync status, etc.
+- name: "1a. Gather BIG-IP system and status information"
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - system-info
+      - sync-status
+    provider: "{{ f5_provider }}"
+  register: device_facts
+  ignore_errors: true
+
+# --- Record Individual System Checks ---
+
+- name: Record Device Reachable check
+  ansible.builtin.set_fact:
+    health_check_results: "{{ health_check_results + [{'item': 'Device Reachable', 'command': 'bigip_device_info', 'expected': 'Successful', 'actual': 'Facts gathered successfully' if not device_facts.failed else 'Fail: ' + device_facts.msg, 'status': 'OK' if not device_facts.failed else 'Fail'}] }}"
+
+- name: Record Product Version check
+  ansible.builtin.set_fact:
+    health_check_results: "{{ health_check_results + [{'item': 'Product Version', 'command': 'system-info:product_version', 'expected': 'N/A', 'actual': device_facts.system_info.product_version | default('N/A'), 'status': 'OK'}] }}"
+  when: not device_facts.failed and device_facts.system_info is defined
+
+- name: Record Failover State check
+  ansible.builtin.set_fact:
+    health_check_results: "{{ health_check_results + [{'item': 'Failover State', 'command': 'sync-status:status', 'expected': 'In Sync or Standalone', 'actual': device_facts.sync_status[0].status | default('N/A'), 'status': 'OK' if device_facts.sync_status[0].status in ['In Sync', 'Standalone'] else 'Fail'}] }}"
+  when: not device_facts.failed and device_facts.sync_status is defined and device_facts.sync_status | length > 0
+
+- name: Record Appliance Uptime check
+  ansible.builtin.set_fact:
+    health_check_results: "{{ health_check_results + [{'item': 'Appliance Uptime', 'command': 'system-info:uptime', 'expected': 'N/A', 'actual': ( (device_facts.system_info.uptime | int / 86400) | round(1) | string ) + ' days', 'status': 'OK'}] }}"
+  when: not device_facts.failed and device_facts.system_info is defined and device_facts.system_info.uptime is defined
+
+# 2. Check LTM Virtual Server Status
+- name: "2. Gather LTM Virtual Server status"
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - virtual-servers
+    provider: "{{ f5_provider }}"
+  register: ltm_vs_facts
+  ignore_errors: true
+  when: not device_facts.failed
+
+- name: Analyze LTM Virtual Server operational status and Record Result
+  ansible.builtin.set_fact:
+    health_check_results: >-
+      {{ health_check_results + [ltm_check] }}
+  vars:
+    all_servers: "{{ ltm_vs_facts.virtual_servers | default([]) }}"
+    total_count: "{{ all_servers | length }}"
+    offline_servers: "{{ all_servers | selectattr('availability_status', 'ne', 'available') | list }}"
+    offline_count: "{{ offline_servers | length }}"
+    online_count: "{{ total_count | int - offline_count | int }}" # <-- FIX: Added | int filter
+    grouped_failures: "{{ offline_servers | groupby('status_reason') }}"
+    ltm_check:
+      item: "LTM Virtual Servers (Operational Status)"
+      command: "bigip_device_info (virtual-servers)"
+      expected: "All virtual servers are 'available'"
+      actual: |
+        {% if 'virtual_servers' not in ltm_vs_facts %}
+        LTM module not provisioned or no virtual servers found.
+        {% else %}
+        Total VIP: {{ total_count }}
+        VIP UP: {{ online_count }}
+        VIP Down: {{ offline_count }}
+        {% if offline_count | int > 0 %}
+
+        {% for reason, vips in grouped_failures %}
+        Down details (Reason: {{ reason }}):
+        {% for vip in vips %}
+        - {{ vip.name }}
+        {% endfor %}
+        {% endfor %}
+        {% endif %}
+        {% endif %}
+      status: "{{ 'OK' if offline_count | int == 0 else 'Fail' }}" # <-- FIX: Added | int filter for safety
+  when: not device_facts.failed
+
+# 3. Check GTM Wide IP Status
+- name: "3. Gather GTM Wide IP status"
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - gtm-wide-ips
+      - gtm-servers
+      
+    provider: "{{ f5_provider }}"
+  register: gtm_facts
+  ignore_errors: true
+  when: not device_facts.failed
+
+- name: Analyze and Record GTM Wide IP status
+  block:
+    - name: Analyze GTM Wide IP status
+      ansible.builtin.set_fact:
+        gtm_offline_ips: "{{ gtm_facts['gtm-wide-ips'] | selectattr('availabilityState', 'ne', 'available') | map(attribute='name') | list }}"
+        gtm_check:
+          item: "GTM Wide IPs"
+          command: "bigip_device_info (gtm-wide-ips)"
+          expected: "All wide IPs are available"
+          actual: "{{ 'All ' ~ (gtm_facts['gtm-wide-ips'] | length) ~ ' wide IPs are available' if gtm_offline_ips | length == 0 else (gtm_offline_ips | length | string) + ' wide IP(s) offline: ' + (gtm_offline_ips | join(', ')) }}"
+          status: "{{ 'OK' if gtm_offline_ips | length == 0 else 'Fail' }}"
+    - name: Record GTM Wide IP result
+      ansible.builtin.set_fact:
+        health_check_results: "{{ health_check_results + [gtm_check] }}"
+  ignore_errors: true
+  when: not gtm_facts.failed and gtm_facts['gtm-wide-ips'] is defined and gtm_facts['gtm-wide-ips'] | length > 0
+
+- name: Record GTM not present or no Wide IPs
+  ansible.builtin.set_fact:
+    health_check_results: "{{ health_check_results + [{'item': 'GTM Wide IPs', 'command': 'bigip_device_info (gtm-wide-ips)', 'expected': 'N/A', 'actual': 'GTM module not provisioned or no Wide IPs found.', 'status': 'OK'}] }}"
+  ignore_errors: true
+  when: not device_facts.failed and (gtm_facts.failed or gtm_facts['gtm-wide-ips'] is not defined or gtm_facts['gtm-wide-ips'] | length == 0)
+
+
+# 4. Check Network Interface Status
+- name: "4. Gather Network Interface status"
+  f5networks.f5_modules.bigip_device_info:
+    gather_subset:
+      - interfaces
+    provider: "{{ f5_provider }}"
+  register: interface_facts
+  ignore_errors: true
+  when: not device_facts.failed
+
+- name: Analyze and Record Network Interface status
+  ansible.builtin.set_fact:
+    health_check_results: >-
+      {{ health_check_results + [interface_check] }}
+  vars:
+    enabled_interfaces: "{{ interface_facts.interfaces | selectattr('enabled', 'eq', 'yes') | list }}"
+    enabled_count: "{{ enabled_interfaces | length }}"
+    failed_interfaces: "{{ enabled_interfaces | selectattr('active_media_type', 'eq', 'none') | list }}"
+    failed_count: "{{ failed_interfaces | length }}"
+    up_count: "{{ enabled_count | int - failed_count | int }}" # <-- FIX: Added | int filter
+    
+    interface_check:
+      item: "Network Interfaces"
+      command: "bigip_device_info (interfaces)"
+      expected: "All enabled interfaces are connected"
+      actual: |
+        Checked [{{ enabled_interfaces | map(attribute='name') | join(', ') }}]
+        Interface UP: {{ up_count }}
+        Interface Down: {{ failed_count }}
+        {% if failed_count | int > 0 %}
+
+        Down details:
+        {{ failed_count }} interface(s) are enabled but not connected: {{ failed_interfaces | map(attribute='name') | join(', ') }}
+        {% endif %}
+      status: "{{ 'OK' if failed_count | int == 0 else 'Fail' }}" # <-- FIX: Added | int filter for safety
+  when: not interface_facts.failed and interface_facts.interfaces is defined

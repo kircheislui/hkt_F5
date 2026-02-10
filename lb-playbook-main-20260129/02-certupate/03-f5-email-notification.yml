@@ -1,0 +1,78 @@
+---
+- name: F5 Email notification and job creation
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+  - f5_email_table_style: "style='border: 1px solid;'"
+  tasks:
+
+  - name: Reset grouped_f5_objects
+    ansible.builtin.set_fact:
+      grouped_f5_objects: []
+
+  - name: Group objects by uploaded certificate filename
+    ansible.builtin.set_fact:
+      grouped_f5_objects: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | groupby('uploaded_cert.filename') }}"
+    run_once: true
+    delegate_to: localhost
+    when: f5_profile_virtual_server_tobe_updated_with_profile_all_certs is defined
+
+  - meta: end_play
+    when: grouped_f5_objects |length == 0
+
+  - name: Print grouped objects
+    debug:
+      msg: "Groupped object is : {{ grouped_f5_objects }}"
+
+  - name: Debug Copy templates and generate jobs
+    debug: 
+      msg: "f5_cert_deploy_copy_template_item.1.0 : {{ f5_cert_deploy_copy_template_item.1.0 }}"      
+    vars:
+      email_group: "{{ f5_cert_deploy_copy_template_item }}"
+    loop: "{{ grouped_f5_objects }}"
+    loop_control:
+      label: "{{ f5_cert_deploy_copy_template_item.0 }}"
+      loop_var: f5_cert_deploy_copy_template_item
+      index_var: f5_cert_deploy_copy_template_index
+    when: f5_profile_virtual_server_tobe_updated_with_profile_all_certs is defined
+
+  - name: Copy templates and generate jobs
+    ansible.controller.job_template: 
+      controller_host: "{{ ansible_tower_host }}"
+      controller_oauthtoken: "{{ ansible_tower_token }}"
+      name: "[F5-Renew-Cert][CR-{{ f5_cert_deploy_copy_template_item.1.0.uploaded_cert.ansible_job_id }}-{{'%03d' | format(f5_cert_deploy_copy_template_index) }}]"
+      copy_from: "{{ f5_sftp_certs_copy_template_from }}"
+      limit: "{{ f5_cert_deploy_copy_template_item.1.0.f5_device_host_or_ip }}"
+      validate_certs: no
+      extra_vars: 
+        f5_cert_deploy_object: "{{ f5_cert_deploy_copy_template_item.1 }}"   
+        f5_email_renew_notification_list: "{{ f5_email_renew_notification_list }}"
+    vars:
+      email_group: "{{ f5_cert_deploy_copy_template_item }}"
+    loop: "{{ grouped_f5_objects }}"
+    loop_control:
+      label: "{{ f5_cert_deploy_copy_template_item.0 }}"
+      loop_var: f5_cert_deploy_copy_template_item
+      index_var: f5_cert_deploy_copy_template_index
+    register: f5_generated_job_templates
+    when: 
+      - f5_profile_virtual_server_tobe_updated_with_profile_all_certs is defined
+      - not (f5_cert_deploy_copy_template_item.1.0.no_match_found | default(false))
+
+  - name: Send emails for each group
+    ansible.builtin.include_tasks: sub-tasks/03-send_email.yml
+    vars:
+      email_group: "{{ f5_cert_deploy_email_item }}"
+      f5_job_template_id: >-
+        {{ 
+          f5_generated_job_templates.results[f5_cert_deploy_email_index].id 
+          if f5_generated_job_templates.results[f5_cert_deploy_email_index].id is defined 
+          else 'N/A' 
+        }}
+    loop: "{{ grouped_f5_objects }}"
+    loop_control:
+      label: "{{ f5_cert_deploy_email_item.0 }}"
+      loop_var: f5_cert_deploy_email_item
+      index_var: f5_cert_deploy_email_index
+    when: f5_profile_virtual_server_tobe_updated_with_profile_all_certs is defined

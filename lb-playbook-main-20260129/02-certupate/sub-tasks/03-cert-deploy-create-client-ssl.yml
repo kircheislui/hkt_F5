@@ -1,0 +1,73 @@
+    - name : Get SSL Client Profile
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh list ltm profile client-ssl {{ client_ssl_fullpath }} | head -n-1  |tail -n +2 |grep -v inherit-ca-certkeychain |grep -v inherit-certkeychain | sed 's/cert-key-chain/cert-key-chain\ add/g' | tr -d '\n'"
+      delegate_to: localhost
+      register: f5_profile_client_ssl_cmd
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      
+    - name: Print SSL Profile Option Obtained
+      ansible.builtin.debug:
+        msg: "{{ f5_profile_client_ssl_cmd }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Get name of the new client profile
+      ansible.builtin.set_fact:
+        f5_profile_client_profile_new_name: "{{ client_ssl_fullpath |regex_replace('(.*)(_(.*))$','\\1_Client-'+ f5_current_year_in_string ) | regex_replace('(.+)(?<!_Client-'+f5_current_year_in_string + ')$','\\1_Client-'+ f5_current_year_in_string) }}-{{ f5_cert_deploy_object_single.uploaded_cert.ansible_job_id }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+
+    - name: Copy Client SSL Profile
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh create ltm profile client-ssl {{ f5_profile_client_profile_new_name }} {{ f5_profile_client_ssl_cmd.stdout[0] }}"
+      delegate_to: localhost
+      register: f5_profile_client_ssl_create
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Print result of tmsh create
+      ansible.builtin.debug:
+        msg: "{{ f5_profile_client_ssl_create }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name : Get SSL Client Profile Created
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh list ltm profile client-ssl {{ f5_profile_client_profile_new_name }} "
+      delegate_to: localhost
+      register: f5_profile_client_ssl_create_result
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      failed_when: "'not found' in f5_profile_client_ssl_create_result.stdout[0]"
+      
+    - name: Print SSL Client Profile Created
+      ansible.builtin.debug:
+        msg: "{{ f5_profile_client_ssl_create_result }}"
+      delegate_to: localhost
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Update SSL Client Profile with name cert created
+      f5networks.f5_modules.bigip_profile_client_ssl:
+        provider: "{{ provider }}"
+        state: present
+        name: "{{ f5_profile_client_profile_new_name }}"
+        cert_key_chain:
+          - cert: "{{ f5_cert_deploy_cert_name }}"
+            key: "{{ f5_cert_deploy_cert_name }}"
+            chain: "{{ f5_cert_deploy_cert_name }}"
+            true_names: true
+      when:
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      delegate_to: localhost      

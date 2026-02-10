@@ -1,0 +1,29 @@
+---
+- name: Backup F5 UCS
+  hosts: all
+  connection: local
+  gather_facts: true
+  tasks:
+    - name: Setup provider
+      ansible.builtin.set_fact:
+        provider:
+          server: "{{ ansible_host }}"
+          user: "{{ ansible_user }}"
+          password: "{{ ansible_password }}"
+          server_port: "443"
+          no_f5_teem: "false"
+          transport: "rest"
+          validate_certs: false
+          timeout: 6000
+
+    - name: Run F5 checking by TMSH
+      f5networks.f5_modules.bigip_command:
+        commands: 'tmsh show sys version'
+        provider: "{{ provider }}"
+      register: status_result
+
+    - name: Print Backup Result
+      ansible.builtin.debug:
+        msg: "{{ status_result }}" 
+
+# test 

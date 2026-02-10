@@ -1,0 +1,67 @@
+---
+- name: Backup F5 UCS
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    f5_success_host_list: []
+    f5_failed_host_list: []
+  tasks:
+  - name: setup variable with successful and failed list
+    ansible.builtin.set_fact:
+      output_result: "{{ [f5_backup_success.split(',')] | map('zip', f5_backup_host.split(',') ) | map('map', 'reverse') | map('community.general.dict') }}"
+  
+  - name: Debug output  
+    ansible.builtin.debug:
+      msg: "{{ item.key }} - {{ item.value }}"
+    when: item.key != '' or item.value != ''
+    loop: "{{ output_result[0]|dict2items }}"
+
+  - name: Setup Failed Lists   
+    ansible.builtin.set_fact:
+      f5_failed_host_list: "{{ f5_failed_host_list + [item.key] }}"
+    when: 
+    - item.key != '' or item.value != ''
+    - item.value == 'no'
+    loop: "{{ output_result[0]|dict2items }}"  
+
+  - name: Setup Successful Lists   
+    ansible.builtin.set_fact:
+      f5_success_host_list: "{{ f5_success_host_list + [item.key] }}"
+    when: 
+    - item.key != '' or item.value != ''
+    - item.value == 'yes'
+    loop: "{{ output_result[0]|dict2items }}"  
+
+  - name: Debug output  f5_success_host_list 
+    ansible.builtin.debug:
+      msg: "{{ f5_success_host_list }}"
+
+  - name: Debug output  f5_failed_host_list 
+    ansible.builtin.debug:
+      msg: "{{ f5_failed_host_list }}"
+      
+  - name: Send email for result
+    community.general.mail:
+      host: smtp.pccw.com
+      port: 25
+      from: osp-alertmgr@pccw.com
+      to: "{{ f5_backup_notification_email_address }}"
+      subject: "{{ f5_backup_notification_email_subject }}"
+      body: |
+        To whom it may concern:
+        
+        Configuration backup is done on following devices:
+
+        Success:
+        {% for host in f5_success_host_list %}
+        {{ host }}
+        {% endfor %}
+
+        Fail:
+        {% for host in f5_failed_host_list %}
+        {{ host }}
+        {% endfor %}
+        
+    run_once: true
+    delegate_to: localhost

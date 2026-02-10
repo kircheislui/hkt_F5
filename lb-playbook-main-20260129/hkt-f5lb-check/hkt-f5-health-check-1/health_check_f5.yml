@@ -1,0 +1,49 @@
+---
+- name: "Phase 1: Gather F5 BIG-IP Health Check Information"
+  hosts: "{{ target_hosts | default('f5_devices') }}"
+  connection: local
+  gather_facts: false
+  roles:
+    - role: f5_health_check
+
+- name: "Phase 2: Generate and Email Health Check Reports"
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    report_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+  tasks:
+    - name: Ensure report output directory exists
+      ansible.builtin.file:
+        path: "{{ report_output_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Generate HTML report from template
+      ansible.builtin.template:
+        src: roles/f5_health_check/templates/report_template.html.j2
+        dest: "{{ report_output_path }}/f5_health_check_report_{{ report_timestamp }}.html"
+        mode: '0644'
+      vars:
+        report_hosts: "{{ target_hosts | default('f5_devices') }}"
+
+    - name: Generate CSV report from template
+      ansible.builtin.template:
+        src: roles/f5_health_check/templates/report_template.csv.j2
+        dest: "{{ report_output_path }}/f5_health_check_report_{{ report_timestamp }}.csv"
+        mode: '0644'
+      vars:
+        report_hosts: "{{ target_hosts | default('f5_devices') }}"
+
+    - name: Send email with HTML and CSV reports as attachments
+      community.general.mail:
+        host: "{{ email.smtp_server }}"
+        port: "{{ email.smtp_port }}"
+        from: "{{ email.from_address }}"
+        to: "{{ email.to_recipients }}"
+        subject: "{{ email.subject }}"
+        body: "Please find the attached F5 BIG-IP health check reports (CSV and HTML)."
+        attach:
+          - "{{ report_output_path }}/f5_health_check_report_{{ report_timestamp }}.html"
+          - "{{ report_output_path }}/f5_health_check_report_{{ report_timestamp }}.csv"
+      delegate_to: localhost

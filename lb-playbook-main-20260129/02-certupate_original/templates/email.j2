@@ -1,0 +1,64 @@
+To whom it may concern:
+</br>
+</br>
+Please review the following VIP renewal information. Please login Ansible portal to start the job on schedule after approval completed: [F5-Renew-Cert][CR-{{  f5_email_object[0].uploaded_cert.ansible_job_id }}-{{ '%03d' | format( f5_cert_deploy_email_index ) }} ]
+</br>
+</br>
+Please visit below link for <a href="https://rhansbm01.pccw.com/#/templates?template.name=[F5-Renew-Cert][CR-{{  f5_email_object[0].uploaded_cert.ansible_job_id }}-{{ '%03d' | format( f5_cert_deploy_email_index ) }}]"> proceeding the task</a>
+</br>
+</br>
+{% for f5_object in f5_email_object %}
+<table {{ f5_email_table_style }} >
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >Device Name</td>
+    <td colspan=3 {{ f5_email_table_style }} >{{ f5_object.device_name }} </td>
+ </tr>
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >VIP</td>
+    <td colspan=3 {{ f5_email_table_style }} >{{ f5_object.virtual_server_address }} </td>
+ </tr> 
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} ></td>
+    <td {{ f5_email_table_style }} >Uploaded Cert</td>
+    <td {{ f5_email_table_style }} >F5 Cert (Existing - Client)</td>
+    <td {{ f5_email_table_style }} >F5 Cert (Existing - Server)</td>
+ </tr>
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >DNS Names</td>
+    <td {{ f5_email_table_style }} >{{ f5_object.uploaded_cert.names | join(', ') }} </td>
+    
+    {% if f5_object.client_cert is defined %}
+    <td {{ f5_email_table_style }} >{{ f5_object.client_cert.subject_alternative_name | default(f5_object.client_cert.subject) | replace('DNS:', '') }} </td>
+    {% else %}
+    <td {{ f5_email_table_style }} >N/A</td>
+    {% endif %}
+        
+    {% if f5_object.server_cert is defined%}
+    <td {{ f5_email_table_style }} >{{ f5_object.server_cert.subject_alternative_name | default(f5_object.server_cert.subject) | replace('DNS:', '') }} </td>
+    {% else %}
+    <td {{ f5_email_table_style }} >N/A</td>
+    {% endif %}
+ </tr>
+ <tr {{ f5_email_table_style }} >
+    <td {{ f5_email_table_style }} >Expiration Date</td>
+
+    <td {{ f5_email_table_style }} >{{ f5_object.uploaded_cert.expiration_date }} </td>
+    {% if f5_object.client_cert is defined%}
+    <td {{ f5_email_table_style }} >{{ f5_object.client_cert.expiration_date }} </td>
+    {% else %}
+    <td {{ f5_email_table_style }} >N/A</td>
+    {% endif %}
+        
+    {% if f5_object.server_cert is defined%}
+    <td {{ f5_email_table_style }} >{{ f5_object.server_cert.expiration_date }} </td>
+    {% else %}
+    <td {{ f5_email_table_style }} >N/A</td>
+    {% endif %}
+
+
+    
+    
+ </tr> 
+</table>
+<br>
+{% endfor %}

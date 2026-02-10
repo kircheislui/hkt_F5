@@ -1,0 +1,33 @@
+    - name: Initialize vairables
+      ansible.builtin.set_fact:
+        f5_cert_to_update: []
+        f5_client_profile_to_update: []
+        f5_server_profile_to_update: []
+        f5_client_profile_to_copy_in_server: []
+        f5_server_profile_to_copy_in_server: []
+        f5_profile_virtual_server_tobe_updated_with_profile_client: []
+        f5_profile_virtual_server_tobe_updated_with_profile_server:  [] 
+        f5_found_match_for_this_file: false
+
+    - name: Check F5 VIP and Profiles to be updated
+      ansible.builtin.include_tasks: sub-tasks/03-check-f5-vip-to-be-update.yml
+      vars:
+        f5_hostname_to_check: "{{ f5_hostname_to_check_list_item }}"      
+      loop: "{{ f5_hostname_to_check_list.names }}"
+      loop_control:
+        loop_var: f5_hostname_to_check_list_item
+      register: f5_looped_hostname_to_check
+
+    # NEW TASK: Add a placeholder if no matches were found after checking all DNS names
+    - name: Add 'No Match' entry for notification
+      ansible.builtin.set_fact:
+        f5_profile_virtual_server_tobe_updated_with_profile_all_certs: "{{ f5_profile_virtual_server_tobe_updated_with_profile_all_certs | default([]) + [ no_match_object ] }}"
+      vars:
+        no_match_object:
+          f5_device_host_or_ip: "{{ f5_ansible_host }}"
+          device_name: "{{ f5_hostname_result.stdout[0].split(' ')[1] }} ( active )"
+          virtual_server_address: "N/A"
+          uploaded_cert: "{{ f5_hostname_to_check_list }}"
+          no_match_found: true
+      when: 
+        - not f5_found_match_for_this_file

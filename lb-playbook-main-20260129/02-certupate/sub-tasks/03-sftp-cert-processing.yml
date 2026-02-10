@@ -1,0 +1,180 @@
+  - name: Get Current Timestamp by command
+    ansible.builtin.shell: 
+      date +%s
+    delegate_to: localhost    
+    run_once: True
+    register: f5_current_timestamp_stdout
+
+  - name: Get Current Timestamp by command
+    ansible.builtin.set_fact: 
+      f5_current_timestamp:  "{{  '%012d' | format( f5_current_timestamp_stdout.stdout |int)  }}"
+    delegate_to: localhost    
+    run_once: True
+
+  - name: Printout current timestamp
+    ansible.builtin.debug: 
+      msg:  "Current Timestamp in second: {{ f5_current_timestamp }}"
+    delegate_to: localhost    
+    run_once: True
+
+  - name: Get A List of files
+    ansible.builtin.shell: |
+      sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no'  {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ f5_sftp_certs_path }}/ <<<"ls -ld *!(/)"
+    register: f5_sftp_file_list
+    delegate_to: localhost
+    no_log: True  
+    run_once: True
+
+  - name: Print out list of files
+    ansible.builtin.debug:
+      msg: "{{ f5_sftp_file_list.stdout_lines |select( 'match','(.*p12)|(.*password)|(.*pfx)' ) }}"
+    delegate_to: localhost
+
+  - name: Reset f5_file_list
+    ansible.builtin.set_fact:
+      f5_file_list: []
+
+  - meta: end_play
+    when: f5_file_list |length == 0
+
+  - name: Set Fact for file names
+    ansible.builtin.set_fact:
+      f5_file_list: "{{ f5_file_list|default([]) + [ { 'filename': item.split(' ')|last , 'date': item[43:55] } ] }}"
+    delegate_to: localhost
+    loop: "{{ f5_sftp_file_list.stdout_lines |select( 'match','(.*p12)|(.*password)|(.*pfx)' ) | list }}"
+    run_once: True
+
+  - name: Print out procesed f5_file_list
+    ansible.builtin.debug:
+      msg: "{{ f5_file_list }}"
+    delegate_to: localhost 
+    when: f5_file_list
+
+  - name: Set if any file to be processed
+    ansible.builtin.set_fact:
+      f5_has_file_to_be_processed: "{{ f5_file_list |selectattr('filename', 'match', '(.*p12)|(.*pfx)' ) |length >0 }}"
+    delegate_to: localhost
+    when: f5_file_list
+
+  - name: copy the file to localhost
+    ansible.builtin.shell: |
+      sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no'  {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ f5_sftp_certs_path }}/ <<<"get {{ item.filename }}"
+    args:
+      chdir: "/tmp/"
+    delegate_to: localhost
+    no_log: True
+    loop: "{{ f5_file_list }}"
+    run_once: True       
+    when: f5_has_file_to_be_processed
+
+  - name: Check file locally
+    ansible.builtin.stat:
+      path: "/tmp/{{ item.filename }}"
+    delegate_to: localhost
+    loop: "{{ f5_file_list }}"
+    run_once: True
+    when: f5_has_file_to_be_processed
+
+  - name: Move file to doing
+    ansible.builtin.shell: |
+      sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no'  {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ f5_sftp_certs_path }}/ <<<"rename {{ item.filename }} ./{{ PROCESSED_FOLDER_NAME }}/{{ f5_current_timestamp }}.{{ item.filename }}.{{ SUFFIX_DOING}} "
+      sshpass -p '{{ f5_sftp_password }}' sftp -o 'StrictHostKeyChecking no'  {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ f5_sftp_certs_path }}/ <<<"rename {{ item.filename }}.password ./{{ PROCESSED_FOLDER_NAME }}/{{ f5_current_timestamp }}.{{ item.filename }}.password "
+    delegate_to: localhost
+    no_log: True  
+    run_once: True
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"
+    when: f5_has_file_to_be_processed
+
+  - name: Generate PKCS#12 file
+    ansible.builtin.shell: |
+      openssl pkcs12 -password "pass:{{ lookup('ansible.builtin.file', '/tmp/'+ item.filename + '.password') }}" -in /tmp/{{ item.filename }} -out /tmp/{{ item.filename }}.key -nodes -nocerts 
+      openssl pkcs12 -password "pass:{{ lookup('ansible.builtin.file', '/tmp/'+ item.filename + '.password') }}" -in /tmp/{{ item.filename }} -out /tmp/{{ item.filename }}.crt -nokeys
+    delegate_to: localhost
+    run_once: True
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"
+    when: f5_has_file_to_be_processed
+
+  - name: Check tmp path
+    ansible.builtin.shell: |
+      ls -latrh /tmp/
+    delegate_to: localhost
+    run_once: True     
+    when: f5_has_file_to_be_processed
+
+  - name: Print out cert debug
+    ansible.builtin.shell: |
+      cat /tmp/{{ item.filename }}.crt
+    delegate_to: localhost
+    run_once: True        
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"    
+    when: f5_has_file_to_be_processed
+
+  - name: Print out key debug
+    ansible.builtin.shell: |
+      cat /tmp/{{ item.filename }}.key
+    delegate_to: localhost
+    run_once: True  
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"
+    when: f5_has_file_to_be_processed
+
+  - name: Upload certs and keys to sftp
+    ansible.builtin.shell: |
+      sshpass -p '{{ f5_sftp_password }}' scp -o 'StrictHostKeyChecking no'  '/tmp/{{ item.filename }}.crt' {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ f5_sftp_certs_path }}/{{ PROCESSED_FOLDER_NAME }}/{{ f5_current_timestamp }}.{{ item.filename }}.crt
+      sshpass -p '{{ f5_sftp_password }}' scp -o 'StrictHostKeyChecking no'  '/tmp/{{ item.filename }}.key' {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ f5_sftp_certs_path }}/{{ PROCESSED_FOLDER_NAME }}/{{ f5_current_timestamp }}.{{ item.filename }}.key
+    delegate_to: localhost
+    no_log: True  
+    run_once: True
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"  
+    when: f5_has_file_to_be_processed
+
+  - name: Get information on generated certificate
+    community.crypto.x509_certificate_info:
+      path: /tmp/{{ item.filename }}.crt
+    register: f5_current_cert_info
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"
+    delegate_to: localhost    
+    run_once: True  
+    when: f5_has_file_to_be_processed
+
+  - name: Printout f5_current_cert_info
+    ansible.builtin.debug:
+      msg: "{{ f5_current_cert_info }}"
+    delegate_to: localhost    
+    run_once: True  
+    when: f5_has_file_to_be_processed
+
+  - name: Find out subjects and SAN
+    ansible.builtin.shell: |
+      echo "{{ item.filename }}"
+      openssl x509 -noout -subject -nameopt multiline -in /tmp/{{ item.filename }}.crt |grep commonName | awk -F\= '{print $2}' |tr -d ' ' |tr '\n' ','
+      openssl x509 -noout -ext subjectAltName  -nameopt multiline -in /tmp/{{ item.filename }}.crt |grep -v 'Subject Alternative Name'|tr -d ' '|sed 's/DNS\://g' |sed 's/IP\ Address\://g'| sed 's/Noextensionsincertificate//g'
+      openssl x509 -enddate -noout -in /tmp/{{ item.filename }}.crt | awk -F\= '{print $2}'
+    delegate_to: localhost
+    register: f5_cert_info_output
+    run_once: True  
+    loop: "{{ f5_file_list |selectattr('filename', 'match', '.*p(12)*(fx)*$' ) }}"
+    when: f5_has_file_to_be_processed
+
+  - name: Printout f5_cert_info_output
+    ansible.builtin.debug:
+      msg: "{{ f5_cert_info_output }}"
+    delegate_to: localhost    
+    run_once: True  
+    when: f5_has_file_to_be_processed
+
+  - name: Set List of DNS Names 
+    ansible.builtin.set_fact:
+      f5_cert_name_list: "{{ f5_cert_name_list|default([]) + [ { 'filename': item.stdout_lines[0], 'names': item.stdout_lines[1].split(',') |unique |reject('match', '^$'), 'expiration_date': item.stdout_lines[2], 'ansible_job_id': '%010d' | format(tower_job_id) , 'file_timestamp': f5_current_timestamp } ] }}"
+    delegate_to: localhost    
+    loop: "{{ f5_cert_info_output.results | list }}"
+    run_once: True  
+    when: f5_has_file_to_be_processed
+
+#  - name: Printout list of names
+#    ansible.builtin.debug:
+#      msg: "{{ f5_cert_name_list }}"
+#    delegate_to: localhost    
+#    run_once: True 
+#    when: 
+#    - f5_cert_name_list
+#    - f5_has_file_to_be_processed

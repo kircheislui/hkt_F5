@@ -1,0 +1,162 @@
+---
+# input variable: f5_cert_deploy_object
+- name: Update SSL Cert
+  hosts: all
+  gather_facts: false
+  vars:
+    PROCESSED_FOLDER_NAME: processed
+    SUFFIX_DOING: doing
+    SUFFIX_DONE: done
+    f5_has_server_profile_to_update: false
+    f5_server_profile_to_copy_in_server: []
+    f5_server_profile_to_update: []
+    f5_profile_virtual_server_tobe_updated_with_profile_server: []
+    f5_email_table_style: "style='border: 1px solid;'"
+
+  tasks:
+    - name: Setup provider
+      ansible.builtin.set_fact:
+        provider:
+          server: "{{ ansible_host }}"
+          user: "{{ f5_ui_username }}"
+          password: "{{ f5_ui_password }}"
+          server_port: "443"
+          no_f5_teem: "false"
+          validate_certs: false
+
+    - name : Get BIG-IP failover status
+      f5networks.f5_modules.bigip_command:
+        provider: "{{ provider }}"
+        commands:
+          - "tmsh show sys failover"
+      delegate_to: localhost
+      register: f5_failoverStatus 
+
+    - name: Gather F5 Facts
+      f5networks.f5_modules.bigip_device_info:
+        gather_subset: 
+          - virtual-servers
+          - device-groups
+        provider: "{{ provider }}"
+      register: bigip_facts_result
+      delegate_to: localhost
+      run_once: true
+      when: "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Get local year in string
+      ansible.builtin.command: "date +%Y"
+      register: f5_current_year_in_string_command
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - f5_current_year_in_string is not defined
+      delegate_to: localhost
+      
+    - name: Set local year in string
+      ansible.builtin.set_fact: 
+        f5_current_year_in_string: "{{ f5_current_year_in_string_command.stdout }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - f5_current_year_in_string is not defined
+      delegate_to: localhost
+      
+    - name: Print current year in string
+      ansible.builtin.debug: 
+        msg: "{{ f5_current_year_in_string  }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      delegate_to: localhost
+
+    - name: Include upload cert task
+      ansible.builtin.include_tasks: sub-tasks/03-cert-deploy-upload-cert.yml
+      vars:
+        f5_cert_deploy_object_single: "{{ f5_cert_deploy_object[0] }}"
+      run_once: true 
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Include actual deploy task
+      ansible.builtin.include_tasks: sub-tasks/03-cert-deploy-main.yml
+      vars:
+        f5_cert_deploy_object_single: "{{ f5_cert_deploy_object_item }}"
+      run_once: true 
+      loop: "{{ f5_cert_deploy_object }}"
+      loop_control:
+        loop_var: f5_cert_deploy_object_item
+        label: "{{ f5_cert_deploy_object_item.virtual_server }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Sync Settings
+      f5networks.f5_modules.bigip_configsync_action: 
+        device_group: "{{ bigip_facts_result_device_groups_item.name }}"
+        sync_device_to_group: true
+        provider: "{{ provider }}"
+      run_once: true 
+      loop: "{{ bigip_facts_result.device_groups }}"
+      loop_control:
+        loop_var: bigip_facts_result_device_groups_item
+        label: "{{ bigip_facts_result_device_groups_item.full_path }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"    
+      delegate_to: localhost
+
+    - name: Include rename cert
+      ansible.builtin.include_tasks: sub-tasks/03-cert-deploy-rename-cert.yml
+      vars:
+        f5_cert_deploy_object_single: "{{ f5_cert_deploy_object[0] }}"
+      run_once: true 
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+
+    - name: Verify Certs from public
+      ansible.builtin.include_tasks: sub-tasks/03-cert-verify-public.yml
+      run_once: true 
+      loop: "{{ f5_cert_deploy_object[0].uploaded_cert.names|list }}"
+      loop_control:
+        loop_var: f5_cert_deploy_cert_public_name
+        label: "{{ f5_cert_deploy_cert_public_name }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"  
+      - "'dmz' not in f5_cert_deploy_object[0].device_name | lower"
+
+    - name: Get Lastest fact from F5
+      f5networks.f5_modules.bigip_device_info:
+        gather_subset: 
+          - ssl-certs
+          - client-ssl-profiles
+          - server-ssl-profiles
+          - virtual-servers          
+        provider: "{{ provider }}"
+      register: bigip_facts_result_check
+      delegate_to: localhost
+      run_once: true
+      when: "'active' in f5_failoverStatus['stdout'][0]"
+      
+    - name: Print public name
+      ansible.builtin.debug:
+        msg: "{{ f5_playbook_cert_list }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"     
+      - "'dmz' not in f5_cert_deploy_object[0].device_name | lower"
+
+
+    - name: Print out email_object
+      ansible.builtin.debug:
+        msg: "{{ lookup('ansible.builtin.template', 'templates/email_success.j2' ) }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"     
+      - "'dmz' not in f5_cert_deploy_object[0].device_name | lower"
+
+    - name: Send email for result
+      community.general.mail:
+        host: smtp.pccw.com
+        port: 25
+        from: osp-alertmgr@pccw.com
+        to: "{{ f5_email_renew_notification_list }}"
+        subject: "[Ansible] [F5-Renew-Cert] [ CR-{{ f5_cert_deploy_object[0].uploaded_cert.ansible_job_id }} ] Completed"
+        body: "{{ lookup('ansible.builtin.template', 'templates/email_success.j2' ) }}"
+        subtype: "html"   
+      delegate_to: localhost
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"     
+      - "'dmz' not in f5_cert_deploy_object[0].device_name | lower"     

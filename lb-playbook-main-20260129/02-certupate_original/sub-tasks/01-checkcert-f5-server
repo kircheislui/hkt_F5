@@ -1,0 +1,84 @@
+---
+# variables used
+#    - f5_hostname_to_check: "sbmvno.hkcsl.com"
+#    - f5_ssl_verify_jump_host: '10.168.12.206'
+#    - f5_ssl_verify_jump_user: 'root'
+#    - f5_ssl_verify_jump_pass: 'adminroot123'
+
+    - name: Get UUID for Tempfile Processing
+      ansible.builtin.set_fact: 
+        f5_cert_check_tmp_UUID: "{{  '' | to_uuid }}"
+      delegate_to: localhost
+
+#      register: f5_cert_result
+
+    - name: Gather F5 Facts
+      f5networks.f5_modules.bigip_device_info:
+        gather_subset:
+          - ssl-certs
+          - client-ssl-profiles
+          - server-ssl-profiles
+          - virtual-servers
+          - irules
+        provider: "{{ provider }}"
+      register: bigip_facts_result
+      delegate_to: localhost
+
+    - name: Find out the cert to check
+      ansible.builtin.set_fact:
+        f5_cert_to_check: "{{ f5_cert_to_check |default([]) + [ item ]  }}"
+      loop: "{{ bigip_facts_result.ssl_certs }}"
+      loop_control:
+        label: "{{ item.full_path }}"
+      when:
+      - "f5_hostname_to_check in item.subject|default('') or f5_hostname_to_check in item.subject_alternative_name|default('')"
+      delegate_to: localhost
+   
+    - name: Print certificate to be checked
+      ansible.builtin.debug:
+        msg: "{{ f5_cert_to_check }}"
+      delegate_to: localhost
+ 
+    - name: Find out the client ssl_profile to be checked
+      ansible.builtin.set_fact:
+        f5_client_profile_to_check: "{{ f5_client_profile_to_check |default([]) + [ item[1]  | combine({ 'f5_certs': item[0]}) ]  }}"
+      loop: "{{ f5_cert_to_check | product(bigip_facts_result.client_ssl_profiles)|list  }}"
+      loop_control:
+        label: "{{ item[0].name }} - {{ item[1].name }}"
+      when:
+      - "item[0].full_path  == item[1].certificate_file |default('') or item[0].full_path  == item[1].chain_file|default('') or item[0].full_path  == item[1].key_file|default('') "
+      delegate_to: localhost
+
+    - name: Find out client ssl_profile in use in vserver
+      ansible.builtin.set_fact:
+        f5_client_profile_to_check_in_server: "{{ f5_client_profile_to_check_in_server |default([]) + [ item[0] | combine({ 'virtual_server': item[1].full_path, 'virtual_server_address': item[1].destination_address|string+':'+item[1].destination_port|string } ) | combine({'virtual_server_profile_list': item[1].profiles }) ]  }}"
+      loop: "{{  f5_client_profile_to_check  | product(bigip_facts_result.virtual_servers)|list  }}"
+      loop_control:
+        label: "{{ item[0].name }} - {{ item[1].name }}"
+      when:
+      - "item[1].profiles | selectattr('full_path','equalto',item[0].full_path ) | list | count > 0 "
+      delegate_to: localhost
+
+    - name: Print client ssl profiles to be checked
+      ansible.builtin.debug:
+        msg: "{{ f5_client_profile_to_check_in_server }}"
+      delegate_to: localhost
+
+    - name: Get Current timestamp in linux
+      ansible.builtin.command: "date +%s"
+      delegate_to: localhost
+      register: f5_current_timestamp
+    
+
+    - name: Print certs to verify
+      ansible.builtin.debug:
+        msg: "{{ f5_client_profile_to_check_in_server |map(attribute='f5_certs') |unique }}"
+      delegate_to: localhost
+
+    - name: Output result to facts
+      ansible.builtin.set_fact:
+        f5_check_ssl_cert_in_server: "{{ f5_check_ssl_cert_in_server |default([]) + [ item | combine( { 'days_to_expire': ( ( (item.expiration_timestamp |int) - ( f5_current_timestamp.stdout |int ))  / 60 / 60 / 24 ) |int  }) ] }}"
+      delegate_to: localhost
+      loop: "{{ f5_client_profile_to_check_in_server |map(attribute='f5_certs') |unique }}"
+      loop_control:
+        label: "{{ item.issuer }}"

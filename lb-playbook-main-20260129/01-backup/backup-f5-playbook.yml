@@ -1,0 +1,95 @@
+---
+- name: Backup F5 UCS
+  hosts: all
+  connection: local
+  gather_facts: true
+  vars:
+    week_name_mapping:
+    - "Sun"
+    - "Mon"
+    - "Tue"
+    - "Web"
+    - "Thu"
+    - "Fri"
+    - "Sat"
+
+  tasks:
+    - name: Backup F5 UCS
+      block:
+      - name:  Get current week of the year
+        ansible.builtin.set_fact: 
+          internal_week_of_year:  "{{ ( '%w' | strftime |trim |int ) %4 }}"
+
+      - name:  Set filename suffix by current week of the year
+        ansible.builtin.set_fact: 
+          internal_filename_suffix: "{{ week_name_mapping[internal_week_of_year|int]  }}"
+
+      - name: Setup provider
+        ansible.builtin.set_fact:
+          provider:
+            server: "{{ ansible_host }}"
+            user: "{{ ansible_user }}"
+            password: "{{ ansible_password }}"
+            server_port: "443"
+            no_f5_teem: "false"
+            validate_certs: false
+
+      - name: Run TMSH get hostname
+        f5networks.f5_modules.bigip_command:
+          commands: 'tmsh list /sys global-settings hostname |grep hostname'
+          provider: "{{ provider }}"
+        register: hostname_result
+
+      - name: Run TMSH Backup Command
+        f5networks.f5_modules.bigip_command:
+          commands: 'tmsh save sys ucs ansible.ucs'
+          provider: "{{ provider }}"
+        register: backup_result
+
+      - name: Print Backup Result
+        ansible.builtin.debug:
+          msg: "{{ backup_result }}"   
+
+      - name: Download a new UCS
+        f5networks.f5_modules.bigip_ucs_fetch:
+          src: "ansible.ucs"
+          dest: "/tmp/{{ ansible_host }}-{{ internal_filename_suffix }}.ucs"
+          provider: "{{ provider }}"
+
+      - name: Upload UCS backup to SFTP
+        ansible.builtin.shell: |
+          sshpass -p '{{ f5_sftp_password }}' scp -o 'StrictHostKeyChecking no'  '/tmp/{{ ansible_host }}-{{ internal_filename_suffix }}.ucs' {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ ansible_host }}-{{ internal_filename_suffix }}.ucs
+        no_log: True
+
+      - name: Gather data groups
+        f5networks.f5_modules.bigip_device_info:
+          gather_subset: 
+            - internal-data-groups
+          provider: "{{ provider }}"
+        register: f5_datagroups_result
+
+      - name:  Print datagroup
+        debug:
+          msg: "{{ f5_datagroups_result.internal_data_groups }}"
+          
+      - name: Save Data Group to local
+        ansible.builtin.copy:
+          content: "{{  f5_datagroups_result.internal_data_groups }}"
+          dest: "/tmp/{{ ansible_host }}-{{ internal_filename_suffix }}.datagroup.json"
+
+      - name: Upload datagroup backup to SFTP
+        ansible.builtin.shell: |
+          sshpass -p '{{ f5_sftp_password }}' scp -o 'StrictHostKeyChecking no'  '/tmp/{{ ansible_host }}-{{ internal_filename_suffix }}.datagroup.json' {{ f5_sftp_username }}@{{ f5_sftp_host }}:{{ f5_sftp_path }}/{{ ansible_host }}-{{ internal_filename_suffix }}.datagroup.json
+        no_log: True
+
+      - name: Setting return to email
+        ansible.builtin.set_stats:
+          data:
+            f5_backup_success: "yes,"
+            f5_backup_host: "{{ hostname_result.stdout[0].split(' ')[1] }} - {{ ansible_host }},"
+      rescue:
+      - name: Setting return to email
+        ansible.builtin.set_stats:
+          data:
+            f5_backup_success: "no,"
+            f5_backup_host: "{{ ansible_host }},"

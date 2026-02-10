@@ -1,0 +1,21 @@
+---
+# variables used
+#    - f5_hostname_to_check: "sbmvno.hkcsl.com"
+#    - f5_ssl_verify_jump_host: '10.168.12.206'
+#    - f5_ssl_verify_jump_user: 'root'
+#    - f5_ssl_verify_jump_pass: 'adminroot123'
+
+    - name: Get Current Date by bash
+      ansible.builtin.command: "date +%Y-%m-%dT%H:%M:%SZ"
+      delegate_to: localhost
+      register: f5_current_date_by_bash
+
+    - name: Set the number of expiry day
+      ansible.builtin.set_fact:
+        f5_playbook_number_of_expiry_day: "{{ ( (f5_playbook_cert.not_after |to_datetime('%Y%m%d%H%M%SZ')) - (f5_current_date_by_bash.stdout | to_datetime('%Y-%m-%dT%H:%M:%SZ')) ).days }}"
+      delegate_to: localhost
+
+    - name: Print Out the number of expiry days
+      ansible.builtin.debug:
+        msg: "{{ f5_playbook_number_of_expiry_day }}"
+      delegate_to: localhost

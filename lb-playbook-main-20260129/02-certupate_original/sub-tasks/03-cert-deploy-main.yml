@@ -1,0 +1,32 @@
+    - name: Include create client ssl cert
+      ansible.builtin.include_tasks: sub-tasks/03-cert-deploy-create-client-ssl.yml
+      vars:
+        client_ssl_fullpath: "{{ f5_cert_deploy_object_single.client_profile_full_path }}"
+      run_once: true 
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_cert_deploy_object_single.client_profile_full_path is defined"
+
+    - name: Include create server ssl cert
+      ansible.builtin.include_tasks: sub-tasks/03-cert-deploy-create-server-ssl.yml
+      vars:
+        server_ssl_fullpath: "{{ f5_cert_deploy_object_single.server_profile_full_path }}"
+      run_once: true 
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"
+      - "f5_cert_deploy_object_single.server_profile_full_path is defined"
+
+    - name: Prepare update virtual server
+      ansible.builtin.include_tasks: sub-tasks/03-cert-deploy-update-vs.yml
+      vars:
+        f5_update_virtual_server_to_be_udpated: "{{ f5_update_virtual_server_item }}"
+        client_ssl_fullpath: "{{ f5_cert_deploy_object_single.client_profile_full_path |default('NA') }}"
+        server_ssl_fullpath: "{{ f5_cert_deploy_object_single.server_profile_full_path |default('NA') }}"
+      run_once: true 
+      loop: "{{ bigip_facts_result.virtual_servers }}"
+      loop_control:
+        loop_var: f5_update_virtual_server_item
+        label: "{{ f5_update_virtual_server_item.full_path }}"
+      when: 
+      - "'active' in f5_failoverStatus['stdout'][0]"      
+      - "f5_update_virtual_server_item.full_path == f5_cert_deploy_object_single.virtual_server"

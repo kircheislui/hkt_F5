@@ -1,0 +1,88 @@
+To whom it may concern:
+</br>
+</br>
+Please review the following VIP renewal information.
+
+{# --- REQUIREMENT 3: Hide Link if No Job Created --- #}
+{% if f5_job_template_id != 'N/A' %}
+Please login Ansible portal to start the job on schedule after approval completed: [F5-Renew-Cert][CR-{{  f5_email_object[0].uploaded_cert.ansible_job_id }}-{{ '%03d' | format( f5_cert_deploy_email_index ) }} ]
+</br>
+</br>
+Please visit below link for <a href="https://{{ f5_aap_hostname }}/execution/templates/job-template/{{ f5_job_template_id }}/details"> proceeding the task</a>
+{% else %}
+<b>Note: No update job was created for this batch as no matching certificates were found.</b>
+{% endif %}
+</br>
+</br>
+
+{% for f5_object in f5_email_object %}
+<table {{ f5_email_table_style }} >
+    {# --- ROW 1: Device Name --- #}
+    <tr {{ f5_email_table_style }} >
+        <td {{ f5_email_table_style }} >Device Name</td>
+        <td colspan=3 {{ f5_email_table_style }} >{{ f5_object.device_name }} </td>
+    </tr>
+
+    {# --- ROW 2: VIP / Status (Unified) --- #}
+    <tr {{ f5_email_table_style }} >
+        <td {{ f5_email_table_style }} >VIP</td>
+        <td colspan=3 {{ f5_email_table_style }} >
+            {# If no match, show the status message here. Otherwise show the VIP address #}
+            {% if f5_object.no_match_found is defined and f5_object.no_match_found %}
+                N/A (No matching certificates found on F5)
+            {% else %}
+                {{ f5_object.virtual_server_address }}
+            {% endif %}
+        </td>
+    </tr>
+
+    {# --- ROW 3: Headers --- #}
+    <tr {{ f5_email_table_style }} >
+        <td {{ f5_email_table_style }} ></td>
+        <td {{ f5_email_table_style }} >Uploaded Cert</td>
+        <td {{ f5_email_table_style }} >F5 Cert (Existing - Client)</td>
+        <td {{ f5_email_table_style }} >F5 Cert (Existing - Server)</td>
+    </tr>
+
+    {# --- ROW 4: DNS Names (Unified) --- #}
+    <tr {{ f5_email_table_style }} >
+        <td {{ f5_email_table_style }} >DNS Names</td>
+        
+        {# REQUIREMENT 2: Always show DNS Names, never filename #}
+        <td {{ f5_email_table_style }} >{{ f5_object.uploaded_cert.names | join(', ') }} </td>
+        
+        {# REQUIREMENT 1: Use N/A for missing existing certs (Works for both scenarios) #}
+        {% if f5_object.client_cert is defined %}
+        <td {{ f5_email_table_style }} >{{ f5_object.client_cert.subject_alternative_name | default(f5_object.client_cert.subject) | replace('DNS:', '') }} </td>
+        {% else %}
+        <td {{ f5_email_table_style }} >N/A</td>
+        {% endif %}
+            
+        {% if f5_object.server_cert is defined%}
+        <td {{ f5_email_table_style }} >{{ f5_object.server_cert.subject_alternative_name | default(f5_object.server_cert.subject) | replace('DNS:', '') }} </td>
+        {% else %}
+        <td {{ f5_email_table_style }} >N/A</td>
+        {% endif %}
+    </tr>
+
+    {# --- ROW 5: Expiration Date (Unified) --- #}
+    <tr {{ f5_email_table_style }} >
+        <td {{ f5_email_table_style }} >Expiration Date</td>
+
+        <td {{ f5_email_table_style }} >{{ f5_object.uploaded_cert.expiration_date }} </td>
+
+        {% if f5_object.client_cert is defined%}
+        <td {{ f5_email_table_style }} >{{ f5_object.client_cert.expiration_date }} </td>
+        {% else %}
+        <td {{ f5_email_table_style }} >N/A</td>
+        {% endif %}
+            
+        {% if f5_object.server_cert is defined%}
+        <td {{ f5_email_table_style }} >{{ f5_object.server_cert.expiration_date }} </td>
+        {% else %}
+        <td {{ f5_email_table_style }} >N/A</td>
+        {% endif %}
+    </tr> 
+</table>
+<br>
+{% endfor %}
